@@ -64,7 +64,7 @@ class NodeCLI():
         if command is not None:
             p_args += [command]
         p_args += pos_args + named_args
-        print("CALL ", p_args)
+        #print("CALL ", p_args)
         process = subprocess.Popen(p_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         cli_stdout, cli_stderr = process.communicate(input=self.input)
         returncode = process.poll()

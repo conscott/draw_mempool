@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import getopt
 import time
 import copy
@@ -7,12 +8,16 @@ import os
 import sys
 import networkx as nx
 import subprocess
+import decimal
 from rpc import NodeCLI
 from matplotlib import pyplot as plt
-from matplotlib.ticker import ScalarFormatter, FormatStrFormatter
+from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
 
+rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"))
 mempoolinfo = {}
+blocktemplatetxs = set()
+
 MIN_FEE = 1     # in Sat/Byte
 HIGH_FEE = 100  # in Sat/Byte
 
@@ -71,6 +76,9 @@ def get_tx_age_minutes(tx):
 def fee_to_node_size(fee):
     return min(1+math.log(fee, 2)*10, 1000)
 
+def tx_to_node_size(tx):
+    return min(1+mempoolinfo[tx]['size']/10.0, 1000)
+
 def get_tx_graph(tx, draw=False):
     G = nx.DiGraph()
     G.add_node(tx)
@@ -90,7 +98,7 @@ def draw_tx_simple(G):
     # positions for all nodes
     pos = graphviz_layout(G, prog='dot')
     fees = [get_tx_fee(tx) for tx in G]
-    nodesize = [fee_to_node_size(f) for f in fees]
+    nodesize = [tx_to_node_size(tx) for tx in G]
     nodecolors = [1 for f in fees]
     nx.draw_networkx_nodes(G, pos, node_color=nodecolors, node_size=nodesize, cmap=plt.cm.Reds_r)
     nx.draw_networkx_edges(G, pos, edgelist=G.edges(data=True), arrow_size=10, width=3)
@@ -118,9 +126,24 @@ def draw_mempool_graph(G, title=None):
     print("Max Age vs Min Age: [%s, %s] = %s min " % (max_age, min_age, max_age-min_age))
 
     G.position = {tx: (tx_ages[tx], tx_fees[tx]) for tx in G}
-    nodesize = [fee_to_node_size(tx_fees[tx]) for tx in G]
+
+    # Nodesize by fee-rate
+    #nodesize = [fee_to_node_size(tx_fees[tx]) for tx in G]
+
+    # Nodesize by tx size
+    nodesize = [tx_to_node_size(tx) for tx in G]
+
+    # Lable as txid
     nodelabels = {tx: tx[:4] for tx in G}
-    alpha = [min(.2*mempoolinfo[tx]['ancestorcount'], 1) for tx in G]
+
+    # Node color has in or out of block template
+    if blocktemplatetxs:
+        nodecolors = ['b' if tx in blocktemplatetxs else 'r' for tx in G]
+    else:
+        nodecolors = ['r' for tx in G]
+
+    # Can make the transparency of tx based on....?
+    #alpha = [min(.2*mempoolinfo[tx]['ancestorcount'], 1) for tx in G]
 
     fig, ax = plt.subplots()
 
@@ -156,19 +179,20 @@ def draw_mempool_graph(G, title=None):
     fig.set_size_inches(12, 8, forward=True)
     fig.canvas.mpl_connect('button_press_event', onClick)
 
+    # Turn off log format for y-scale
     if max_fee > 100:
-        plt.yscale('log')
-        ax.get_yaxis().set_major_formatter(FormatStrFormatter('%.0f'))
-        #ax.set_yticks([100, 300, 500, 750, 1000, 1200])
+        #plt.yscale('log')
+        #ax.set_yticks([0, 1, 100, 300, 500, 750, 1000, 1200])
+        ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.0f}'))
 
     if (max_age - min_age) > 100:
         plt.xscale('log')
         ax.get_xaxis().set_major_formatter(FormatStrFormatter('%.0f'))
 
-    # plt.xlim(min_age-1, max_age+1)
-
     if max_fee < 5:
         plt.ylim(0.0, 5)
+
+    ax.autoscale(True)
 
     # plt.axis('off')
     plt.title(title or "Transactions in mempool")
@@ -177,7 +201,7 @@ def draw_mempool_graph(G, title=None):
 
     plt.gca().invert_xaxis()
     pos = G.position
-    nx.draw_networkx_nodes(G, pos, alpha=alpha, node_size=nodesize, label='trans')
+    nx.draw_networkx_nodes(G, pos, alpha=0.3, node_color=nodecolors, node_size=nodesize, label='trans')
     nx.draw_networkx_edges(G, pos, alpha=0.3, arrowsize=15, label='spends')
     plt.show()
 
@@ -238,22 +262,57 @@ def get_mempool_graph(txlimit=1000, **kwargs):
 
 
 def usage():
-    return "TODO"
+    print("""Draw and explore transactions in the mempool.\n
+    ./draw_mempool.py [filter options]
+          --colorbt                Color getblocktemplate nodes different
+          --snapshot=JSON      Specify json file of mempool snapshot
+          --txs=[]                 Specify a particular tx id to draw
+          --txlimit=COUNT          Max number of Tx (will stop filter once reached)
+          --minfee=FEE             Min fee in satoshis
+          --maxfee=FEE             Max fee in satoshis
+          --minfeerate=FEERATE     Min fee in satoshis / byte
+          --maxfeerate=FEERATE     Max fee in satoshis / byte
+          --minheight=HEIGHT       Min block height
+          --maxheight=HEIGHT       Max block height
+          --minsize=SIZE           Min tx size in bytes
+          --maxsize=SIZE           Max tx size in bytes
+          --minage=SECONDS         Min tx age in seconds
+          --maxage=SECONDS         Max tx age in seconds
+          --mindescendants=COUNT   Minimum transactions decendants
+          --maxdescendants=COUNT   Maximum transactions decendants
+          --minancestors=COUNT     Minimum transaction ancestors
+          --maxancestors=COUNT     Maximum transaction ancestors""")
 
 
-if __name__ == "__main__":
+def get_options():
+    return ["minfee", "maxfee", "minfeerate", "maxfeerate",
+            "minheight", "maxheight", "minsize", "maxsize",
+            "minage", "maxage", "minancestors", "maxancestors",
+            "mindescendants", "maxdescendants",
+            "txlimit", "txs",
+            "snapshot",
+            "colorbt"]
 
-    rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"))
+# Load block template transactions
+def load_bt_txs():
+    global blocktemplatetxs
+    for tx in rpc.getblocktemplate()['transactions']:
+        blocktemplatetxs.add(tx['txid'])
+    print("Size of block template is %s txs" % len(blocktemplatetxs))
 
-    # Get verbose mempoolinfo, TxId -> TxInfo
-    mempoolinfo = rpc.getrawmempool('true')
 
-    getopt_long_args = '''minfee= maxfee= minfeerate= maxfeerate=
-                          minheight= maxheight= minsize= maxsize=
-                          minage= maxage= minancestors= maxancestors=
-                          mindescendants= maxdescendants= txlimit='''.split()
+# Load mempool transactions
+def load_mempool(snapshot=None):
+    global mempoolinfo
+    if snapshot:
+        mempoolinfo = json.load(open(snapshot), parse_float=decimal.Decimal)
+    else:
+        mempoolinfo = rpc.getrawmempool('true')
+    print("Size of mempool is %s txs" % len(mempoolinfo))
 
-    filter_options = {}
+
+def main():
+    getopt_long_args = [opt+'=' for opt in get_options()]
     try:
         opts, args = getopt.getopt(sys.argv[1:], [], getopt_long_args)
     except getopt.GetoptError as err:
@@ -261,12 +320,37 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Hacky is my name
+    snapshot = None
+    txs = None
+    colorbt = None
+    filter_options = {}
     for opt, arg in opts:
-        filter_options[opt.replace('-', '')] = int(arg)
+        if 'snapshot' in opt:
+            snapshot = arg
+        elif 'txs' in opt:
+            txs = arg
+        elif 'colorbt' in opt:
+            colorbt = arg
+        else:
+            filter_options[opt.replace('-', '')] = int(arg)
 
     print("Using filters %s" % filter_options)
-    G = get_mempool_graph(**filter_options)
-    if not G:
-        print("Filtered out all transactions, nothing to draw")
+    if colorbt:
+        load_bt_txs()
+    load_mempool(snapshot)
+    if txs:
+        for tx in txs.split(','):
+            for txm in mempoolinfo.keys():
+                if txm[:8] == tx[:8]:
+                    print("SAME!")
+            G = get_tx_graph(tx)
+            draw_mempool_graph(G)
     else:
-        draw_mempool_graph(G, title='Mempool Filtered')
+        G = get_mempool_graph(**filter_options)
+        if not G:
+            print("Filtered out all transactions, nothing to draw")
+        else:
+            draw_mempool_graph(G, title='Mempool Filtered')
+
+if __name__ == "__main__":
+    main()

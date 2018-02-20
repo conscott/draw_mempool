@@ -17,7 +17,7 @@ Test transaction graph
 import draw_mempool
 from decimal import Decimal
 
-mempoolinfo = {
+mempoolinfo_small = {
     '0001': {'fee': Decimal(0.00002000), 'size': 200, 'ancestorcount': 1, 'descendantcount': 6, 'time': 10, 'depends': [], 'spentby': ['0003', '0004', '0005']},
     '0002': {'fee': Decimal(0.00020000), 'size': 200, 'ancestorcount': 1, 'descendantcount': 6, 'time': 20, 'depends': [], 'spentby': ['0006', '0007']},
     '0003': {'fee': Decimal(0.00004000), 'size': 200, 'ancestorcount': 2, 'descendantcount': 1, 'time': 40, 'depends': ['0001'], 'spentby': []},
