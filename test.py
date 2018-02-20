@@ -35,4 +35,4 @@ mempoolinfo = {
 
 draw_mempool.set_mempool(mempoolinfo)
 G = draw_mempool.get_tx_graph('0012', draw=False)
-draw_mempool.draw_time_fee_tx(G)
+draw_mempool.draw_mempool_graph(G)
