@@ -28,9 +28,10 @@ class NodeCLIAttr:
 class NodeCLI():
     """Interface to bitcoin-cli for an individual node"""
 
-    def __init__(self, binary):
+    def __init__(self, binary, datadir=None):
         self.options = []
         self.binary = binary
+        self.datadir = datadir
         self.input = None
 
     def __call__(self, *options, input=None):
@@ -59,12 +60,13 @@ class NodeCLI():
         named_args = [str(key) + "=" + str(value) for (key, value) in kwargs.items()]
         assert not (pos_args and named_args), "Cannot use positional arguments and named arguments in the same bitcoin-cli call"
         p_args = [self.binary] + self.options
+        if self.datadir:
+            p_args += ["-datadir=" + self.datadir]
         if named_args:
             p_args += ["-named"]
         if command is not None:
             p_args += [command]
         p_args += pos_args + named_args
-        #print("CALL ", p_args)
         process = subprocess.Popen(p_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         cli_stdout, cli_stderr = process.communicate(input=self.input)
         returncode = process.poll()

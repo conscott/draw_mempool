@@ -14,42 +14,70 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
 
-# Globals
+
+# Globals #
+
+# RPC interface
 rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"))
+# The graph of all mempool transactions
 G = nx.DiGraph()
+# Tx -> TxInfo
 mempoolinfo = {}
+# set(Txs)
 mempoolset = set()
+# set(Txs) in getblocktemplate
 blocktemplatetxs = set()
+# for showing smart fee estimates
+fee_estimates = {}
+# 1 BTC = COIN Satoshis
 COIN = 100000000
+# For looking at TX in blockchain.inf on double click
 URL_SCHEME = "https://blockchain.info/tx/{}"
+# Hack until my #12479 is merged!
+build_graph_func = None
 
 
-# For testing
+# For testing purposes
 def set_mempool(mempool):
+    global mempoolinfo
     mempoolinfo = mempool
+    set_build_graph_func()
 
 
+# Set which function to use when building graphs. This indirection
+# Can be resolved if my PR adding child relations to getrawmempool output is
+# being used in bitcoind
+def set_build_graph_func():
+    global build_graph_func
+    randtx = next(iter(mempoolinfo.values()))
+    if 'spentby' in randtx:
+        build_graph_func = build_graph_pending
+    else:
+        build_graph_func = build_graph_legacy
+
+
+# Only needed if 'spentby' is not present
 def find_descendants(tx, exclude=set()):
     return [child for (child, child_info) in mempoolinfo.items()
             if tx in child_info['depends'] and child not in exclude]
 
 
-def build_graph(base_tx, G, seen):
+# Required if Tx does not have `spentby` in getrawmempool output
+def build_graph_legacy(base_tx, G, seen):
     # Iterate through ancestors
     base_info = mempoolinfo[base_tx]
     anscestor = [tx for tx in base_info['depends'] if tx not in seen]
     for tx_ans in anscestor:
-        ans_info = mempoolinfo[tx_ans]
         # print("Adding ancestor edge %s -> %s, seen %s" % (tx_ans, base_tx, list(seen)))
         G.add_edge(tx_ans, base_tx)
         seen.add(tx_ans)
-        build_graph(tx_ans, G, seen)
-        if ans_info['descendantcount'] > 2:
-            for tx_desc in find_descendants(tx_ans, exclude=seen):
-                # print("Adding descendent edge %s -> %s" % (tx_ans, tx_desc))
-                G.add_edge(tx_ans, tx_desc)
-                seen.add(tx_desc)
-                build_graph(tx_desc, G, seen)
+        build_graph_legacy(tx_ans, G, seen)
+    if base_info['descendantcount'] > 1:
+        for tx_desc in find_descendants(base_tx, exclude=seen):
+            # print("Adding descendent edge %s -> %s" % (tx_ans, tx_desc))
+            G.add_edge(base_tx, tx_desc)
+            seen.add(tx_desc)
+            build_graph_legacy(tx_desc, G, seen)
 
 
 # Build a Tx graph the smart way - but requires patch to bitcoin that is pending
@@ -68,6 +96,7 @@ def build_graph_pending(base_tx, G, seen):
         build_graph_pending(tx_desc, G, seen)
 
 
+# Fee in Satoshis
 def get_tx_fee(tx):
     return mempoolinfo[tx]['fee']*COIN
 
@@ -88,13 +117,13 @@ def fee_to_node_size(fee):
 
 
 def tx_to_node_size(tx):
-    return min(1+mempoolinfo[tx]['size']/10.0, 1000)
+    return min(1+mempoolinfo[tx]['size']/10.0, 2000)
 
 
 def add_to_graph(tx):
     G.add_node(tx)
     seen = set([tx])
-    build_graph_pending(tx, G, seen)
+    build_graph_func(tx, G, seen)
     return seen
 
 
@@ -111,14 +140,16 @@ def draw_tx_simple():
     plt.show()
 
 
+# Kick off a tab open after a double click near tx
 def follow_link(tx):
     url = URL_SCHEME.format(tx)
     cmd = "python -m webbrowser -t %s" % url
     FNULL = open(os.devnull, 'w')
     subprocess.call(cmd.split(), stdout=FNULL, stderr=subprocess.STDOUT)
 
-def animate_graph(title=None):
 
+# Probably did not do this right
+def animate_graph(title=None):
     # First exec needs to show()
     plt.ion()
     fig, ax = setup_fig()
@@ -131,12 +162,14 @@ def animate_graph(title=None):
 
     while True:
         print("Redraw!")
-        plt.pause(.1)
+        plt.pause(.25)
         plt.clf()
-        diff = load_mempool(get_diff=True)
-        for tx in diff:
-            print("Adding %s to graph" % tx)
-            add_to_graph(tx)
+
+        load_mempool(update_diff=True)
+
+        if blocktemplatetxs:
+            load_bt_txs()
+
         draw_on_graph(ax, fig, title=title)
         ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
         ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
@@ -144,6 +177,9 @@ def animate_graph(title=None):
         fig.canvas.draw()
         plt.draw()
 
+
+# Make nodes clickable. Have to find nearest neighbor to mouse
+# and then make sure it's close enough to make sense
 def setup_events(fig, ax):
 
     def getXRange():
@@ -163,7 +199,11 @@ def setup_events(fig, ax):
                          key=lambda tup: tup[1])
         nx, ny = pos[node]
         dist_ratio = max(abs(nx-x)/nx, abs(ny-y)/ny)
-        if dist_ratio < .01:
+        if dist_ratio < .02:
+            print("Selected Tx : %s" % node)
+            print("Size        : %s" % mempoolinfo[node]['size'])
+            print("Fee         :  %s" % mempoolinfo[node]['fee'])
+            print("FeeRate     : %s" % get_tx_feerate(node))
             return node
 
     def onClick(event):
@@ -172,15 +212,15 @@ def setup_events(fig, ax):
             if node:
                 follow_link(node)
         else:
+            # TODO
             # Single click behavior
             pass
-
-    fig.set_size_inches(12, 8, forward=True)
     fig.canvas.mpl_connect('button_press_event', onClick)
 
 
 def setup_fig():
     fig, ax = plt.subplots(1)
+    fig.set_size_inches(12, 8, forward=True)
     setup_events(fig, ax)
     return fig, ax
 
@@ -237,8 +277,6 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     if max_fee < 5:
         plt.ylim(0.0, 5)
 
-    # ax.autoscale(True)
-
     # plt.axis('off')
     plt.title(title or "Transactions in mempool")
     plt.xlabel("Tx Age in Minutes")
@@ -250,6 +288,18 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
 
     if draw_labels:
         nx.draw_networkx_labels(G, pos, labels=nodelabels, font_size=4)
+
+    # TODO - get smartestimatefee targets on alternate y-axis on right side
+    """
+    draw_fee_estimates = True
+    if draw_fee_estimates:
+        load_fee_estimates()
+        ax2 = ax.twinx()
+        plt.ylabel('Estimatesmartfee Targets', color='r')
+        for conf, fee in fee_estimates.items():
+            print("Add estimate conf %s = %s" % (conf, fee*COIN))
+            plt.axhline(fee*COIN, color='k', linestyle='--')
+    """
 
 
 def tx_filter(tx,
@@ -296,25 +346,39 @@ def make_mempool_graph(txlimit=10000, **kwargs):
     return G if added else None
 
 
+# Load fee estimates
+def load_fee_estimates():
+    global fee_estimates
+    fee_estimates = {i: rpc.estimatesmartfee(i)['feerate']/1000 for i in range(2, 12, 2)}
+    print(fee_estimates)
+
+
 # Load block template transactions
 def load_bt_txs():
+    global blocktemplatetxs
+    blocktemplatetxs.clear()
     bt_weight = 0
     bt_fees = 0.0
-    for tx in rpc.getblocktemplate()['transactions']:
+
+    # Need to include segwit txs in block template
+    block_template_txs = rpc.getblocktemplate(json.dumps({"rules": ["segwit"]}))['transactions']
+
+    for tx in block_template_txs:
         blocktemplatetxs.add(tx['txid'])
         bt_weight += tx['weight']
         bt_fees += tx['fee']
+
     print("Size of block template is %s txs" % len(blocktemplatetxs))
     print("Weight is %s and tx fees are %s" % (bt_weight, bt_fees/COIN))
 
 
 # Load mempool transactions
-def load_mempool(snapshot=None, get_diff=False):
+def load_mempool(snapshot=None, update_diff=False):
 
     global mempoolset
     global mempoolinfo
 
-    if get_diff:
+    if update_diff:
         old_set = mempoolset
 
     if snapshot:
@@ -324,18 +388,32 @@ def load_mempool(snapshot=None, get_diff=False):
 
     mempoolset = set(mempoolinfo.keys())
 
+    # This should be _okay_
+    #
+    # We only display mempoolinfo, so if we call getblocktemplate after getrawmempool
+    # and there exists stuff in getblocktemplate that does not exists in mempool, it's
+    # not drawn anyway and just means we are only drawing a subset of the valid block template
+    """
     if blocktemplatetxs:
+        pass
         diff = blocktemplatetxs-mempoolset
-        # TODO - handle diff
+        if diff:
+            print("Diff is %s" % len(diff))
+    """
 
-    if get_diff:
+    # Remove old nodes from the graph
+    if update_diff:
         diff = mempoolset-old_set
         print("There are %s new Txs in mempool" % len(diff))
+        # Just add the tx differences to the graph
+        for tx in diff:
+            add_to_graph(tx)
+
+        # And remove the old
         removed = old_set-mempoolset
         print("There are %s Txs removed from mempool" % len(removed))
         for tx in removed:
             G.remove_node(tx)
-        return diff
 
     print("Size of mempool is %s txs" % len(mempoolinfo))
 
@@ -401,12 +479,14 @@ def main():
 
     print("Using filters %s" % filter_options)
 
+    # Load mempool from rpc or snaphsot
+    load_mempool(snapshot)
+
     # Load block template if passed in
     if colorbt:
         load_bt_txs()
 
-    # Load mempool from rpc or snaphsot
-    load_mempool(snapshot)
+    set_build_graph_func()
 
     # Draw individual transactions or entire mempool graph with filters
     if txs:

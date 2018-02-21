@@ -17,7 +17,7 @@ Test transaction graph
 import draw_mempool
 from decimal import Decimal
 
-mempoolinfo_small = {
+mempoolinfo = {
     '0001': {'fee': Decimal(0.00002000), 'size': 200, 'ancestorcount': 1, 'descendantcount': 6, 'time': 10, 'depends': [], 'spentby': ['0003', '0004', '0005']},
     '0002': {'fee': Decimal(0.00020000), 'size': 200, 'ancestorcount': 1, 'descendantcount': 6, 'time': 20, 'depends': [], 'spentby': ['0006', '0007']},
     '0003': {'fee': Decimal(0.00004000), 'size': 200, 'ancestorcount': 2, 'descendantcount': 1, 'time': 40, 'depends': ['0001'], 'spentby': []},
@@ -33,6 +33,20 @@ mempoolinfo_small = {
 }
 
 
+# Set mempool manually
 draw_mempool.set_mempool(mempoolinfo)
-G = draw_mempool.get_tx_graph('0012', draw=False)
-draw_mempool.draw_mempool_graph(G)
+# Add tx to graph
+draw_mempool.add_to_graph('0008')
+# Draw!
+draw_mempool.draw_mempool_graph()
+
+# Remove 'spentby' field and make sure everything still works
+for tx in mempoolinfo:
+    del mempoolinfo[tx]['spentby']
+
+# Set mempool manually
+draw_mempool.set_mempool(mempoolinfo)
+# Add tx to graph
+draw_mempool.add_to_graph('0008')
+# Draw!
+draw_mempool.draw_mempool_graph()

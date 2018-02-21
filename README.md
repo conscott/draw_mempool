@@ -3,12 +3,14 @@ A tool to draw and inspect mempool transactions and their dependencies
 This is a total WIP and probably will not work as expected.
 
 #### TODO
+- Switch to logging
 - Make verticle line for when block was produced
 - Make conf file
-- Event click on line
+- Event click on descendant line
 - Highlight RBF and CPFP candidates
 - Subtract getblocktemplate from mempool
-- Calculate optimal blockfee based on mempool graph and compared to getblocktemplate
+- Add horizontal lines for estimated fee for confirm time
+- Calculate optimal blockfee based on mempool graph and compare to getblocktemplate
 
 #### Installation
 ```
