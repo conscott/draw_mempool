@@ -501,7 +501,7 @@ def main():
 
     # Draw individual transactions or entire mempool graph with filters
     if args.txs:
-        for tx in args.txs.split(','):
+        for tx in args.txs:
             add_to_graph(tx)
             draw_mempool_graph()
     else:
