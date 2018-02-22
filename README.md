@@ -50,4 +50,6 @@ TODO
 ### Donations
 
 BTC: 1NoZkz1neig1DtDy6etwYB9fgHqEv3oesG
-BTC (Bech32): bc1q52ru4udqk9nnqz4hcg7ukq0wruld6hny43xjj3`
+
+BTC (Bech32): bc1q52ru4udqk9nnqz4hcg7ukq0wruld6hny43xjj3
+
