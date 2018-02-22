@@ -10,6 +10,9 @@ This is a total WIP and may (probably) contain bugs.
 
 
 ### Installation Ubuntu & Debian
+
+You need Python3  and can setup a local virtualenv:
+
 ```
 sudo apt-get install python3-tk tk-dev graphviz graphviz-dev
 virtualenv -p /usr/bin/python3 .venv

@@ -2,7 +2,6 @@
 import argparse
 import copy
 import decimal
-import getopt
 import json
 import math
 import networkx as nx
@@ -38,6 +37,8 @@ COIN = 100000000
 URL_SCHEME = "https://blockchain.info/tx/{}"
 # Hack until my #12479 is merged!
 build_graph_func = None
+# Highlight these
+highlight= []
 
 
 # For testing purposes
@@ -218,7 +219,22 @@ def setup_events(fig, ax):
             # TODO
             # Single click behavior
             pass
+
+    def keyPress(event):
+        # key press events!
+        # m -> subtract getblocktemplate
+        #
+        if event.key == 'm':
+            for tx in blocktemplatetxs:
+                if tx in G:
+                    G.remove_node(tx)
+            if not G:
+                print("Mempool is empty without getblocktemplate")
+            else:
+                draw_mempool_graph(title='Mempool without getblocktemplate')
+
     fig.canvas.mpl_connect('button_press_event', onClick)
+    fig.canvas.mpl_connect('key_press_event', keyPress)
 
 
 def setup_fig():
@@ -263,9 +279,9 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
 
     # Node color has in or out of block template
     if blocktemplatetxs:
-        nodecolors = ['b' if tx in blocktemplatetxs else 'r' for tx in G]
+        nodecolors = ['g' if tx in highlight else 'b' if tx in blocktemplatetxs else 'r' for tx in G]
     else:
-        nodecolors = ['r' for tx in G]
+        nodecolors = ['g' if tx in highlight else 'r' for tx in G]
 
     # Can make the transparency of tx based on....?
     # alpha = [min(.2*mempoolinfo[tx]['ancestorcount'], 1) for tx in G]
@@ -315,8 +331,7 @@ def tx_filter(tx,
               minsize=1, maxsize=8000000, **kwargs):
 
     if kwargs:
-        print("You done fucked up!")
-        print(kwargs)
+        print("Unrecognized filters: %s" % kwargs)
         assert(False)
 
     tx_info = mempoolinfo[tx]
@@ -346,6 +361,10 @@ def make_mempool_graph(txlimit=10000, **kwargs):
                 mempoolinfo_cp.pop(tx, None)
         else:
             mempoolinfo_cp.pop(tx, None)
+
+    if txlimit < len(mempoolinfo):
+        assert(len(mempoolinfo) == len(G))
+
     return G if added else None
 
 
@@ -424,7 +443,6 @@ def load_mempool(snapshot=None, update_diff=False):
 
 def main():
 
-
     # Parse arguments and pass through unrecognised args
     parser = argparse.ArgumentParser(add_help=True,
                                      usage='%(prog)s [options]',
@@ -436,7 +454,8 @@ def main():
     parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
     parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate nodes different')
     parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
-    parser.add_argument('--txs', action='append', help='Comma separated list of txs to draw')
+    parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
+    parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
     parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
     parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
     parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
@@ -465,6 +484,11 @@ def main():
 
     global rpc
     rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
+
+    global highlight
+    if args.hltxs:
+        highlight = args.hltxs
+
 
     # Load mempool from rpc or snaphsot
     load_mempool(args.snapshot)
