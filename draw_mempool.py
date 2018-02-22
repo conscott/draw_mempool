@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import matplotlib.patches as mpatches
 from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
@@ -29,16 +30,20 @@ mempoolinfo = {}
 mempoolset = set()
 # set(Txs) in getblocktemplate
 blocktemplatetxs = set()
+# set RBF txs
+rbf_txs = set()
 # for showing smart fee estimates
 fee_estimates = {}
-# 1 BTC = COIN Satoshis
-COIN = 100000000
 # For looking at TX in blockchain.inf on double click
 URL_SCHEME = "https://blockchain.info/tx/{}"
 # Hack until my #12479 is merged!
 build_graph_func = None
 # Highlight these
 highlight= []
+# 1 BTC = COIN Satoshis
+COIN = 100000000
+# Max sequene
+MAX_SEQUENCE = (0xffffffff-1)
 
 
 # For testing purposes
@@ -98,6 +103,14 @@ def build_graph_pending(base_tx, G, seen):
         G.add_edge(base_tx, tx_desc)
         seen.add(tx_desc)
         build_graph_pending(tx_desc, G, seen)
+
+
+# Check if tx is eligible for replace by fee
+def is_rbf(tx):
+    for vin in rpc.getrawtransaction(tx, 'true')['vin']:
+        if vin['sequence'] < MAX_SEQUENCE:
+            return True
+    return False
 
 
 # Fee in Satoshis
@@ -204,9 +217,9 @@ def setup_events(fig, ax):
         dist_ratio = max(abs(nx-x)/nx, abs(ny-y)/ny)
         if dist_ratio < .02:
             print("\nSelected Tx : %s" % node)
-            print("Size        : %s" % mempoolinfo[node]['size'])
-            print("Fee         :  %s" % mempoolinfo[node]['fee'])
-            print("FeeRate     : %s" % get_tx_feerate(node))
+            print("Size          : %s" % mempoolinfo[node]['size'])
+            print("Fee           : %s" % mempoolinfo[node]['fee'])
+            print("FeeRate       : %s" % get_tx_feerate(node))
             return node
 
     def onClick(event):
@@ -276,14 +289,27 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     # Lable as txid
     nodelabels = {tx: tx[:4] for tx in G}
 
+    # If color-rbf
+
     # Node color has in or out of block template
-    if blocktemplatetxs:
+
+    handles = []
+    if rbf_txs:
+        nodecolors = ['g' if tx in rbf_txs else 'r' for tx in G]
+        green_patch = mpatches.Patch(color='green', label='Tx RBF Eligible')
+        handles.append(green_patch)
+    elif blocktemplatetxs:
         nodecolors = ['g' if tx in highlight else 'b' if tx in blocktemplatetxs else 'r' for tx in G]
+        blue_patch = mpatches.Patch(color='blue', label='Tx in getblocktemplate')
+        handles.append(blue_patch)
     else:
         nodecolors = ['g' if tx in highlight else 'r' for tx in G]
+    red_patch = mpatches.Patch(color='red', label='Tx Normal')
+    handles.append(red_patch)
+    plt.legend(handles=handles)
 
     # Can make the transparency of tx based on....?
-    # alpha = [min(.2*mempoolinfo[tx]['ancestorcount'], 1) for tx in G]
+    alpha = [0.2 if c is 'r' else 0.4 for c in nodecolors]
 
     # Turn off log format for y-scale
     if (max_fee - min_fee) > 100:
@@ -301,7 +327,7 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     plt.ylabel("Fee in Sat/Byte")
 
     pos = G.position
-    nx.draw_networkx_nodes(G, pos, alpha=0.2, node_color=nodecolors, node_size=nodesize, label='trans')
+    nx.draw_networkx_nodes(G, pos, alpha=alpha, node_color=nodecolors, node_size=nodesize, label='trans')
     nx.draw_networkx_edges(G, pos, alpha=0.3, arrowsize=15, label='spends')
 
     if draw_labels:
@@ -361,9 +387,7 @@ def make_mempool_graph(txlimit=10000, **kwargs):
         else:
             mempoolinfo_cp.pop(tx, None)
 
-    if txlimit < len(mempoolinfo):
-        assert(len(mempoolinfo) == len(G))
-
+    print("Filtered down to %s txs" % len(G))
     return G if added else None
 
 
@@ -372,6 +396,20 @@ def load_fee_estimates():
     global fee_estimates
     fee_estimates = {i: rpc.estimatesmartfee(i)['feerate']/1000 for i in range(2, 12, 2)}
     print(fee_estimates)
+
+
+# Load RBF transactions
+#
+# This is VERY SLOW and should be called with some set of
+# filters that minimizes the total TX set
+#
+def load_rbf_txs():
+    global rbf_txs
+    rbf_txs.clear()
+
+    for tx in G:
+        if is_rbf(tx):
+            rbf_txs.add(tx)
 
 
 # Load block template transactions
@@ -389,8 +427,8 @@ def load_bt_txs():
         bt_weight += tx['weight']
         bt_fees += tx['fee']
 
-    print("Size of block template is %s txs" % len(blocktemplatetxs))
-    print("Weight is %s and tx fees are %s" % (bt_weight, bt_fees/COIN))
+    # print("Size of block template is %s txs" % len(blocktemplatetxs))
+    # print("Weight is %s and tx fees are %s" % (bt_weight, bt_fees/COIN))
 
 
 # Load mempool transactions
@@ -449,9 +487,10 @@ def main():
                                      epilog='''Help text and arguments for individual test script:''',
                                      formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
     parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
-    parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate nodes different')
+    parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+    parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate txs different')
+    parser.add_argument('--colorrbf', action='store_true', help='Color txs eligible for replace-by-fee different. VERY SLOW, Dont use with animate')
     parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
     parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
     parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
@@ -507,11 +546,18 @@ def main():
         make_mempool_graph(txlimit=args.txlimit, **filter_options)
         if not G:
             print("Filtered out all transactions, nothing to draw")
+            return
+
+        # Load rbf txs if passed in
+        # Only look at ones in filtered mempool since operation is expensive
+        if args.colorrbf:
+            print("WARNING! Calculating replace-by-fee txs is expensive!")
+            load_rbf_txs()
+
+        if args.animate:
+            animate_graph(title='Live Mempool!')
         else:
-            if args.animate:
-                animate_graph(title='Live Mempool!')
-            else:
-                draw_mempool_graph(title='Mempool Filtered')
+            draw_mempool_graph(title='Mempool Filtered')
 
 if __name__ == "__main__":
     main()
