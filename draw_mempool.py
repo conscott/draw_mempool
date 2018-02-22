@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-import json
-import getopt
-import time
+import argparse
 import copy
-import math
-import os
-import sys
-import networkx as nx
-import subprocess
 import decimal
+import getopt
+import json
+import math
+import networkx as nx
+import os
+import subprocess
+import sys
+import time
 from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
@@ -17,8 +18,10 @@ from networkx.drawing.nx_agraph import graphviz_layout
 
 # Globals #
 
+# Oh baby
+this = sys.modules[__name__]
 # RPC interface
-rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"))
+rpc = None
 # The graph of all mempool transactions
 G = nx.DiGraph()
 # Tx -> TxInfo
@@ -283,7 +286,7 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     plt.ylabel("Fee in Sat/Byte")
 
     pos = G.position
-    nx.draw_networkx_nodes(G, pos, alpha=0.3, node_color=nodecolors, node_size=nodesize, label='trans')
+    nx.draw_networkx_nodes(G, pos, alpha=0.2, node_color=nodecolors, node_size=nodesize, label='trans')
     nx.draw_networkx_edges(G, pos, alpha=0.3, arrowsize=15, label='spends')
 
     if draw_labels:
@@ -382,6 +385,7 @@ def load_mempool(snapshot=None, update_diff=False):
         old_set = mempoolset
 
     if snapshot:
+        print("Using snapshot %s" % snapshot)
         mempoolinfo = json.load(open(snapshot), parse_float=decimal.Decimal)
     else:
         mempoolinfo = rpc.getrawmempool('true')
@@ -418,87 +422,70 @@ def load_mempool(snapshot=None, update_diff=False):
     print("Size of mempool is %s txs" % len(mempoolinfo))
 
 
-def usage():
-    print("""Draw and explore transactions in the mempool.\n
-    ./draw_mempool.py [filter options]
-          --colorbt                   Color getblocktemplate nodes different
-          --snapshot=file.json        Specify json file of mempool snapshot
-          --txs=[]                    Specify a particular tx id to draw
-          --txlimit=COUNT             Max number of Tx (will stop filter once reached)
-          --minfee=FEE                Min fee in satoshis
-          --maxfee=FEE                Max fee in satoshis
-          --minfeerate=FEERATE        Min fee in satoshis / byte
-          --maxfeerate=FEERATE        Max fee in satoshis / byte
-          --minheight=HEIGHT          Min block height
-          --maxheight=HEIGHT          Max block height
-          --minsize=SIZE              Min tx size in bytes
-          --maxsize=SIZE              Max tx size in bytes
-          --minage=SECONDS            Min tx age in seconds
-          --maxage=SECONDS            Max tx age in seconds
-          --mindescendants=COUNT      Minimum transactions decendants
-          --maxdescendants=COUNT      Maximum transactions decendants
-          --minancestors=COUNT        Minimum transaction ancestors
-          --maxancestors=COUNT        Maximum transaction ancestors""")
-
-
-def get_long_options():
-    return ["minfee=", "maxfee=", "minfeerate=", "maxfeerate=",
-            "minheight=", "maxheight=", "minsize=", "maxsize=",
-            "minage=", "maxage=", "minancestors=", "maxancestors=",
-            "mindescendant=s", "maxdescendants=",
-            "txlimit=", "txs=",
-            "snapshot=",
-            "colorbt",
-            "animate"]
-
-
 def main():
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], [], get_long_options())
-    except getopt.GetoptError:
-        usage()
-        sys.exit(1)
 
-    # Hacky is my name
-    snapshot = None
-    txs = None
-    colorbt = False
-    animate = False
-    filter_options = {}
-    for opt, arg in opts:
-        if 'snapshot' in opt:
-            snapshot = arg
-        elif 'txs' in opt:
-            txs = arg
-        elif 'colorbt' in opt:
-            colorbt = True
-        elif 'animate' in opt:
-            animate = True
-        else:
-            filter_options[opt.replace('-', '')] = int(arg)
 
+    # Parse arguments and pass through unrecognised args
+    parser = argparse.ArgumentParser(add_help=True,
+                                     usage='%(prog)s [options]',
+                                     description='A tool to draw, filter, and animate mempool transactions',
+                                     epilog='''Help text and arguments for individual test script:''',
+                                     formatter_class=argparse.RawTextHelpFormatter)
+
+    parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+    parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
+    parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate nodes different')
+    parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
+    parser.add_argument('--txs', action='append', help='Comma separated list of txs to draw')
+    parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
+    parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
+    parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
+    parser.add_argument('--minfeerate', type=float, help='Min fee rate in satoshis/byte')
+    parser.add_argument('--maxfeerate', type=float, help='Max fee rate in satoshis/byte')
+    parser.add_argument('--minheight', type=int, help='Min block height')
+    parser.add_argument('--maxheight', type=int, help='Max block height')
+    parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
+    parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
+    parser.add_argument('--minage', type=float, help='Min tx age in seconds')
+    parser.add_argument('--maxage', type=float, help='Max tx age in seconds')
+    parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
+    parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
+    parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
+    parser.add_argument('--maxancestors', type=int, help='Max tx ancestors')
+    args, unknown_args = parser.parse_known_args()
+
+    if unknown_args:
+        print("Unknown args: %s...Try" % unknown_args)
+        print("./draw_mempool.py --help")
+        return
+
+    # Min/max options
+    filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
     print("Using filters %s" % filter_options)
 
+    global rpc
+    rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
+
     # Load mempool from rpc or snaphsot
-    load_mempool(snapshot)
+    load_mempool(args.snapshot)
 
     # Load block template if passed in
-    if colorbt:
+    if args.colorbt:
         load_bt_txs()
 
     set_build_graph_func()
 
     # Draw individual transactions or entire mempool graph with filters
-    if txs:
-        for tx in txs.split(','):
+    if args.txs:
+        for tx in args.txs.split(','):
             add_to_graph(tx)
             draw_mempool_graph()
     else:
-        make_mempool_graph(**filter_options)
+        make_mempool_graph(txlimit=args.txlimit, **filter_options)
         if not G:
             print("Filtered out all transactions, nothing to draw")
         else:
-            if animate:
+            if args.animate:
                 animate_graph(title='Live Mempool!')
             else:
                 draw_mempool_graph(title='Mempool Filtered')
