@@ -165,7 +165,6 @@ def animate_graph(title=None):
     plt.show()
 
     while True:
-        print("Redraw!")
         plt.pause(.25)
         plt.clf()
 
@@ -204,7 +203,7 @@ def setup_events(fig, ax):
         nx, ny = pos[node]
         dist_ratio = max(abs(nx-x)/nx, abs(ny-y)/ny)
         if dist_ratio < .02:
-            print("Selected Tx : %s" % node)
+            print("\nSelected Tx : %s" % node)
             print("Size        : %s" % mempoolinfo[node]['size'])
             print("Fee         :  %s" % mempoolinfo[node]['fee'])
             print("FeeRate     : %s" % get_tx_feerate(node))
@@ -216,9 +215,9 @@ def setup_events(fig, ax):
             if node:
                 follow_link(node)
         else:
-            # TODO
             # Single click behavior
-            pass
+            # Just print node info
+            node = getNodeForEvent(event)
 
     def keyPress(event):
         # key press events!
