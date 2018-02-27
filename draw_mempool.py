@@ -14,12 +14,11 @@ from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
+from statistics import median
 
 
 # Globals #
 
-# Oh baby
-this = sys.modules[__name__]
 # RPC interface
 rpc = None
 # The graph of all mempool transactions
@@ -39,7 +38,7 @@ URL_SCHEME = "https://blockchain.info/tx/{}"
 # Hack until my #12479 is merged!
 build_graph_func = None
 # Highlight these
-highlight= []
+highlight = []
 # 1 BTC = COIN Satoshis
 COIN = 100000000
 # Max sequene
@@ -169,8 +168,7 @@ def follow_link(tx):
 def animate_graph(title=None):
     # First exec needs to show()
     plt.ion()
-    fig, ax = setup_fig()
-    setup_events(fig, ax)
+    fig, ax = plt.gcf(), plt.gca()
     draw_on_graph(ax, fig, title=title)
     ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
     ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
@@ -178,7 +176,7 @@ def animate_graph(title=None):
     plt.show()
 
     while True:
-        plt.pause(.25)
+        plt.pause(.1)
         plt.clf()
 
         load_mempool(update_diff=True)
@@ -239,11 +237,14 @@ def setup_events(fig, ax):
         if event.key == 'm':
             for tx in blocktemplatetxs:
                 if tx in G:
-                    G.remove_node(tx)
+                    try:
+                        G.remove_node(tx)
+                    except:
+                        pass
             if not G:
                 print("Mempool is empty without getblocktemplate")
             else:
-                draw_mempool_graph(title='Mempool without getblocktemplate')
+                draw_mempool_graph(title='Mempool without getblocktemplate', preserve_scale=True)
 
     fig.canvas.mpl_connect('button_press_event', onClick)
     fig.canvas.mpl_connect('key_press_event', keyPress)
@@ -256,11 +257,23 @@ def setup_fig():
     return fig, ax
 
 
-def draw_mempool_graph(title=None, draw_labels=False):
+def draw_mempool_graph(title=None, draw_labels=False, preserve_scale=False):
+
+    if preserve_scale:
+        old_ylim = plt.gca().get_ylim()
+        old_xlim = plt.gca().get_xlim()
+
     fig, ax = setup_fig()
+
     draw_on_graph(ax, fig, title=title, draw_labels=draw_labels)
+
     ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
     ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
+
+    if preserve_scale:
+        ax.set_ylim(old_ylim)
+        ax.set_xlim(old_xlim)
+
     plt.gca().invert_xaxis()
     plt.show()
 
@@ -274,9 +287,6 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     tx_ages = {tx: get_tx_age_minutes(tx) for tx in G}
     max_age = max(tx_ages.values())
     min_age = min(tx_ages.values())
-
-    print("Max fee vs Min Fee: [%s, %s] = %s diff" % (max_fee, min_fee, max_fee-min_fee))
-    print("Max Age vs Min Age: [%s, %s] = %s min " % (max_age, min_age, max_age-min_age))
 
     G.position = {tx: (tx_ages[tx], tx_fees[tx]) for tx in G}
 
@@ -304,7 +314,10 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
         handles.append(blue_patch)
     else:
         nodecolors = ['g' if tx in highlight else 'r' for tx in G]
-    red_patch = mpatches.Patch(color='red', label='Tx Normal')
+        if highlight:
+            green_patch = mpatches.Patch(color='green', label='Input Tx')
+            handles.append(green_patch)
+    red_patch = mpatches.Patch(color='red', hatch='o', label='Tx')
     handles.append(red_patch)
     plt.legend(handles=handles)
 
@@ -313,7 +326,8 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
 
     # Turn off log format for y-scale
     if (max_fee - min_fee) > 100:
-        plt.yscale('log')
+        #plt.yscale('log')
+        pass
 
     if (max_age - min_age) > 100:
         plt.xscale('log')
@@ -333,17 +347,20 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     if draw_labels:
         nx.draw_networkx_labels(G, pos, labels=nodelabels, font_size=4)
 
-    # TODO - get smartestimatefee targets on alternate y-axis on right side
-    """
-    draw_fee_estimates = True
-    if draw_fee_estimates:
-        load_fee_estimates()
-        ax2 = ax.twinx()
-        plt.ylabel('Estimatesmartfee Targets', color='r')
+    if fee_estimates:
         for conf, fee in fee_estimates.items():
-            print("Add estimate conf %s = %s" % (conf, fee*COIN))
-            plt.axhline(fee*COIN, color='k', linestyle='--')
-    """
+            plt.axhline(fee, color='k', linestyle='--')
+
+
+def stats():
+    # TODO
+    mlen = len(mempoolinfo)
+    tx_fees = [get_tx_feerate(tx) for tx in mempoolinfo]
+    max_fee, min_fee, avg_fee, med_fee = max(tx_fees), min(tx_fees), sum(tx_fees)/len(tx_fees), median(tx_fees)
+    tx_ages = [get_tx_age_minutes(tx) for tx in mempoolinfo]
+    max_age, min_age, avg_age, med_age = max(tx_ages), min(tx_ages), sum(tx_ages)/len(tx_ages), median(tx_ages)
+    tx_size = [tx_info['size'] for tx_info in mempoolinfo.values()]
+    max_size, min_size, avg_size, med_size = max(tx_size), min(tx_size), sum(tx_size)/len(tx_size), median(tx_size)
 
 
 def tx_filter(tx,
@@ -392,10 +409,9 @@ def make_mempool_graph(txlimit=10000, **kwargs):
 
 
 # Load fee estimates
-def load_fee_estimates():
+def load_fee_estimates(n):
     global fee_estimates
-    fee_estimates = {i: rpc.estimatesmartfee(i)['feerate']/1000 for i in range(2, 12, 2)}
-    print(fee_estimates)
+    fee_estimates = {n: float(rpc.estimatesmartfee(n)['feerate'])*COIN/1000.0}
 
 
 # Load RBF transactions
@@ -424,11 +440,7 @@ def load_bt_txs():
 
     for tx in block_template_txs:
         blocktemplatetxs.add(tx['txid'])
-        bt_weight += tx['weight']
-        bt_fees += tx['fee']
 
-    # print("Size of block template is %s txs" % len(blocktemplatetxs))
-    # print("Weight is %s and tx fees are %s" % (bt_weight, bt_fees/COIN))
 
 
 # Load mempool transactions
@@ -473,7 +485,10 @@ def load_mempool(snapshot=None, update_diff=False):
         removed = old_set-mempoolset
         print("There are %s Txs removed from mempool" % len(removed))
         for tx in removed:
-            G.remove_node(tx)
+            try:
+                G.remove_node(tx)
+            except:
+                pass
 
     print("Size of mempool is %s txs" % len(mempoolinfo))
 
@@ -487,8 +502,10 @@ def main():
                                      epilog='''Help text and arguments for individual test script:''',
                                      formatter_class=argparse.RawTextHelpFormatter)
 
+    parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
     parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
     parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+    parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
     parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate txs different')
     parser.add_argument('--colorrbf', action='store_true', help='Color txs eligible for replace-by-fee different. VERY SLOW, Dont use with animate')
     parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
@@ -518,7 +535,6 @@ def main():
 
     # Min/max options
     filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
-    print("Using filters %s" % filter_options)
 
     global rpc
     rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
@@ -527,37 +543,50 @@ def main():
     if args.hltxs:
         highlight = args.hltxs
 
+    global fee_estimates
+    if args.nestimatefee:
+        load_fee_estimates(args.nestimatefee)
 
     # Load mempool from rpc or snaphsot
     load_mempool(args.snapshot)
+
+    if args.stats:
+        stats()
+        return
 
     # Load block template if passed in
     if args.colorbt:
         load_bt_txs()
 
     set_build_graph_func()
+    setup_fig()
 
-    # Draw individual transactions or entire mempool graph with filters
-    if args.txs:
-        for tx in args.txs:
-            add_to_graph(tx)
-            draw_mempool_graph()
-    else:
-        make_mempool_graph(txlimit=args.txlimit, **filter_options)
-        if not G:
-            print("Filtered out all transactions, nothing to draw")
-            return
-
-        # Load rbf txs if passed in
-        # Only look at ones in filtered mempool since operation is expensive
-        if args.colorrbf:
-            print("WARNING! Calculating replace-by-fee txs is expensive!")
-            load_rbf_txs()
-
-        if args.animate:
-            animate_graph(title='Live Mempool!')
+    try:
+        # Draw individual transactions or entire mempool graph with filters
+        if args.txs:
+            for tx in args.txs:
+                highlight.append(tx)
+                add_to_graph(tx)
+                draw_mempool_graph()
         else:
-            draw_mempool_graph(title='Mempool Filtered')
+            make_mempool_graph(txlimit=args.txlimit, **filter_options)
+
+            if not G:
+                print("Filtered out all transactions, nothing to draw")
+                return
+
+            # Load rbf txs if passed in
+            # Only look at ones in filtered mempool since operation is expensive
+            if args.colorrbf:
+                print("WARNING! Calculating replace-by-fee txs is expensive!")
+                load_rbf_txs()
+
+            if args.animate:
+                animate_graph(title='Live Mempool!')
+            else:
+                draw_mempool_graph(title='Mempool Filtered')
+    except KeyboardInterrupt:
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

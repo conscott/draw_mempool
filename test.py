@@ -38,6 +38,7 @@ draw_mempool.set_mempool(mempoolinfo)
 # Add tx to graph
 draw_mempool.add_to_graph('0008')
 # Draw!
+draw_mempool.draw_tx_simple()
 draw_mempool.draw_mempool_graph()
 
 # Remove 'spentby' field and make sure everything still works
