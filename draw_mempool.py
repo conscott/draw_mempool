@@ -59,8 +59,10 @@ def set_build_graph_func():
     global build_graph_func
     randtx = next(iter(mempoolinfo.values()))
     if 'spentby' in randtx:
+        #print("Using fast graph build function")
         build_graph_func = build_graph_pending
     else:
+        #print("Using legacy graph build function")
         build_graph_func = build_graph_legacy
 
 
@@ -283,6 +285,7 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     # tx_fees = {tx: get_tx_fee(tx) for tx in G}
     max_fee = max(tx_fees.values())
     min_fee = min(tx_fees.values())
+    print("Min fee %s" % min(v['fee']*COIN for v in mempoolinfo.values()))
 
     tx_ages = {tx: get_tx_age_minutes(tx) for tx in G}
     max_age = max(tx_ages.values())
@@ -386,7 +389,7 @@ def tx_filter(tx,
             (minsize <= tx_info['size'] <= maxsize))
 
 
-def make_mempool_graph(txlimit=10000, **kwargs):
+def make_mempool_graph(txlimit=15000, **kwargs):
     mempoolinfo_cp = copy.deepcopy(mempoolinfo)
     added = 0
     while added < txlimit:
@@ -559,7 +562,6 @@ def main():
         load_bt_txs()
 
     set_build_graph_func()
-    setup_fig()
 
     try:
         # Draw individual transactions or entire mempool graph with filters
