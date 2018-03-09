@@ -14,10 +14,10 @@ This is a total WIP and may (probably) contain bugs.
 You need Python3  and can setup a local virtualenv:
 
 ```
-sudo apt-get install python3-tk tk-dev graphviz graphviz-dev
+sudo apt-get install virtualenv python3-dev python3-tk graphviz graphviz-dev
 virtualenv -p /usr/bin/python3 .venv
 source .venv/bin/activate
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 ### Installion Mac / Windows
@@ -41,10 +41,6 @@ TODO
 ```
 
 ### TODO
-- Add mempool status
 - Switch to logging
 - Make verticle line on X-axis for when blocks were produced
-- Make conf file
-- Highlight RBF and CPFP candidates
-- Add horizontal lines for estimated fee / per confirmation window
 - Calculate optimal blockfee based on mempool graph and compare to getblocktemplate
