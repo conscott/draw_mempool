@@ -25,6 +25,7 @@ TODO
 
 ### Try it out
 ```
+source .venv/bin/activate
 ./draw_mempool.py --help
 ```
 
