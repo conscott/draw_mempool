@@ -12,7 +12,7 @@ import time
 import matplotlib.patches as mpatches
 from rpc import NodeCLI
 from matplotlib import pyplot as plt
-from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, StrMethodFormatter
+from matplotlib.ticker import StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
 from statistics import median
 
@@ -59,10 +59,10 @@ def set_build_graph_func():
     global build_graph_func
     randtx = next(iter(mempoolinfo.values()))
     if 'spentby' in randtx:
-        #print("Using fast graph build function")
+        # print("Using fast graph build function")
         build_graph_func = build_graph_pending
     else:
-        #print("Using legacy graph build function")
+        # print("Using legacy graph build function")
         build_graph_func = build_graph_legacy
 
 
@@ -107,10 +107,23 @@ def build_graph_pending(base_tx, G, seen):
 
 
 # Check if tx is eligible for replace by fee
-def is_rbf(tx):
+# Need to check tx itself all ancestors
+
+def signals_rbf(tx):
     for vin in rpc.getrawtransaction(tx, 'true')['vin']:
         if vin['sequence'] < MAX_SEQUENCE:
             return True
+    return False
+
+def is_replaceable(tx):
+
+    if mempoolinfo[tx]['signals_rbf']:
+        return True
+
+    for parent in mempoolinfo[tx]['depends']:
+        if is_replaceable(parent):
+            return True
+
     return False
 
 
@@ -285,7 +298,6 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     # tx_fees = {tx: get_tx_fee(tx) for tx in G}
     max_fee = max(tx_fees.values())
     min_fee = min(tx_fees.values())
-    print("Min fee %s" % min(v['fee']*COIN for v in mempoolinfo.values()))
 
     tx_ages = {tx: get_tx_age_minutes(tx) for tx in G}
     max_age = max(tx_ages.values())
@@ -320,32 +332,28 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
         if highlight:
             green_patch = mpatches.Patch(color='green', label='Input Tx')
             handles.append(green_patch)
-    red_patch = mpatches.Patch(color='red', hatch='o', label='Tx')
+    red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
     handles.append(red_patch)
     plt.legend(handles=handles)
 
     # Can make the transparency of tx based on....?
-    alpha = [0.2 if c is 'r' else 0.4 for c in nodecolors]
-
-    # Turn off log format for y-scale
-    if (max_fee - min_fee) > 100:
-        #plt.yscale('log')
-        pass
+    alpha = [0.2 if c is 'r' else 0.5 for c in nodecolors]
 
     if (max_age - min_age) > 100:
         plt.xscale('log')
 
     if max_fee < 5:
         plt.ylim(0.0, 5)
+    elif (max_fee - min_fee) < 10:
+        plt.ylim(0.0, max_fee + 5)
 
-    # plt.axis('off')
     plt.title(title or "Transactions in mempool")
     plt.xlabel("Tx Age in Minutes")
-    plt.ylabel("Fee in Sat/Byte")
+    plt.ylabel("Fee in Sat per Byte")
 
     pos = G.position
     nx.draw_networkx_nodes(G, pos, alpha=alpha, node_color=nodecolors, node_size=nodesize, label='trans')
-    nx.draw_networkx_edges(G, pos, alpha=0.3, arrowsize=15, label='spends')
+    nx.draw_networkx_edges(G, pos, alpha=0.15, arrowsize=15, label='spends')
 
     if draw_labels:
         nx.draw_networkx_labels(G, pos, labels=nodelabels, font_size=4)
@@ -366,6 +374,7 @@ def stats():
     max_size, min_size, avg_size, med_size = max(tx_size), min(tx_size), sum(tx_size)/len(tx_size), median(tx_size)
 
 
+
 def tx_filter(tx,
               minfee=0.0, maxfee=21000000,
               minfeerate=0, maxfeerate=21000000,
@@ -380,10 +389,16 @@ def tx_filter(tx,
         assert(False)
 
     tx_info = mempoolinfo[tx]
+
+    # For setting max relations it gets a little complicated
+    max_related = min(maxancestors, maxdescendants)
+    package_size = tx_info['ancestorcount'] + tx_info['descendantcount'] - 1
+
     return ((minfee <= tx_info['fee']*COIN <= maxfee) and
             (minfeerate <= get_tx_feerate(tx) <= maxfeerate) and
-            (minancestors <= tx_info['ancestorcount'] <= maxancestors) and
-            (mindescendants <= tx_info['descendantcount'] <= maxdescendants) and
+            (minancestors <= tx_info['ancestorcount']) and
+            (mindescendants <= tx_info['descendantcount']) and
+            (package_size <= max_related) and
             (minage <= get_tx_age_minutes(tx) <= maxage) and
             (minheight <= tx_info['height'] <= maxheight) and
             (minsize <= tx_info['size'] <= maxsize))
@@ -427,7 +442,10 @@ def load_rbf_txs():
     rbf_txs.clear()
 
     for tx in G:
-        if is_rbf(tx):
+        mempoolinfo[tx]['signals_rbf'] = signals_rbf(tx)
+
+    for tx in G:
+        if is_replaceable(tx):
             rbf_txs.add(tx)
 
 
