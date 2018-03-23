@@ -108,7 +108,6 @@ def build_graph_pending(base_tx, G, seen):
 
 # Check if tx is eligible for replace by fee
 # Need to check tx itself all ancestors
-
 def signals_rbf(tx):
     for vin in rpc.getrawtransaction(tx, 'true')['vin']:
         if vin['sequence'] < MAX_SEQUENCE:
@@ -434,19 +433,23 @@ def load_fee_estimates(n):
 
 # Load RBF transactions
 #
-# This is VERY SLOW and should be called with some set of
-# filters that minimizes the total TX set
+# Much faster if used with PR #12676
 #
 def load_rbf_txs():
+
     global rbf_txs
     rbf_txs.clear()
 
-    for tx in G:
-        mempoolinfo[tx]['signals_rbf'] = signals_rbf(tx)
-
-    for tx in G:
-        if is_replaceable(tx):
-            rbf_txs.add(tx)
+    if 'bip125-replaceable' in next(iter(mempoolinfo.values())):
+        print("Using new bip125-replaceable flag!")
+        rbf_txs = set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable'] == "yes"])
+    else:
+        print("WARNING! Calculating replace-by-fee txs is expensive!")
+        for tx in G:
+            mempoolinfo[tx]['signals_rbf'] = signals_rbf(tx)
+        for tx in G:
+            if is_replaceable(tx):
+                rbf_txs.add(tx)
 
 
 # Load block template transactions
@@ -461,6 +464,18 @@ def load_bt_txs():
 
     for tx in block_template_txs:
         blocktemplatetxs.add(tx['txid'])
+
+
+def test_bt():
+    bt_args = {
+        "capabilities": ["coinbasetxn", "workid", "coinbase/append"],
+        "rules": ["segwit"]
+    }
+    txs = rpc.getblocktemplate(json.dumps(bt_args))['transactions']
+    weight = sum([tx['weight'] for tx in txs])
+    sigops = sum([tx['sigops'] for tx in txs])
+    fee = sum([tx['fee'] for tx in txs])
+    print("Got weight: %s | txs: %s | fees: %s | sigops: %s" % (weight, len(txs), fee, sigops))
 
 
 
@@ -598,7 +613,6 @@ def main():
             # Load rbf txs if passed in
             # Only look at ones in filtered mempool since operation is expensive
             if args.colorrbf:
-                print("WARNING! Calculating replace-by-fee txs is expensive!")
                 load_rbf_txs()
 
             if args.animate:
