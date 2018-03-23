@@ -14,48 +14,33 @@ from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
-from statistics import median
+from statistics import median, mean
 
 
-# Globals #
-
-# RPC interface
-rpc = None
-# The graph of all mempool transactions
-G = nx.DiGraph()
-# Tx -> TxInfo
-mempoolinfo = {}
-# set(Txs)
-mempoolset = set()
-# set(Txs) in getblocktemplate
-blocktemplatetxs = set()
-# set RBF txs
-rbf_txs = set()
-# for showing smart fee estimates
-fee_estimates = {}
-# For looking at TX in blockchain.inf on double click
-URL_SCHEME = "https://blockchain.info/tx/{}"
-# Hack until my #12479 is merged!
-build_graph_func = None
-# Highlight these
-highlight = []
 # 1 BTC = COIN Satoshis
 COIN = 100000000
+
 # Max sequene
 MAX_SEQUENCE = (0xffffffff-1)
+
+# For looking at TX in blockchain.inf on double click
+URL_SCHEME = "https://blockchain.info/tx/{}"
+
+# Hack until my #12479 is merged!
+build_graph_func = None
 
 
 # For testing purposes
 def set_mempool(mempool):
     global mempoolinfo
     mempoolinfo = mempool
-    set_build_graph_func()
+    set_build_graph_func(mempoolinfo)
 
 
 # Set which function to use when building graphs. This indirection
 # Can be resolved if my PR adding child relations to getrawmempool output is
 # being used in bitcoind
-def set_build_graph_func():
+def set_build_graph_func(mempoolinfo):
     global build_graph_func
     randtx = next(iter(mempoolinfo.values()))
     if 'spentby' in randtx:
@@ -67,13 +52,13 @@ def set_build_graph_func():
 
 
 # Only needed if 'spentby' is not present
-def find_descendants(tx, exclude=set()):
+def find_descendants(mempoolinfo, tx, exclude=set()):
     return [child for (child, child_info) in mempoolinfo.items()
             if tx in child_info['depends'] and child not in exclude]
 
 
 # Required if Tx does not have `spentby` in getrawmempool output
-def build_graph_legacy(base_tx, G, seen):
+def build_graph_legacy(mempoolinfo, base_tx, G, seen):
     # Iterate through ancestors
     base_info = mempoolinfo[base_tx]
     anscestor = [tx for tx in base_info['depends'] if tx not in seen]
@@ -81,29 +66,29 @@ def build_graph_legacy(base_tx, G, seen):
         # print("Adding ancestor edge %s -> %s, seen %s" % (tx_ans, base_tx, list(seen)))
         G.add_edge(tx_ans, base_tx)
         seen.add(tx_ans)
-        build_graph_legacy(tx_ans, G, seen)
+        build_graph_legacy(mempoolinfo, tx_ans, G, seen)
     if base_info['descendantcount'] > 1:
-        for tx_desc in find_descendants(base_tx, exclude=seen):
+        for tx_desc in find_descendants(mempoolinfo, base_tx, exclude=seen):
             # print("Adding descendent edge %s -> %s" % (tx_ans, tx_desc))
             G.add_edge(base_tx, tx_desc)
             seen.add(tx_desc)
-            build_graph_legacy(tx_desc, G, seen)
+            build_graph_legacy(mempoolinfo, tx_desc, G, seen)
 
 
 # Build a Tx graph the smart way - but requires patch to bitcoin that is pending
-def build_graph_pending(base_tx, G, seen):
+def build_graph_pending(mempoolinfo, base_tx, G, seen):
     base_info = mempoolinfo[base_tx]
     anscestor = [tx for tx in base_info['depends'] if tx not in seen]
     for tx_ans in anscestor:
         G.add_edge(tx_ans, base_tx)
         seen.add(tx_ans)
-        build_graph_pending(tx_ans, G, seen)
+        build_graph_pending(mempoolinfo, tx_ans, G, seen)
 
     descendants = [tx for tx in base_info['spentby'] if tx not in seen]
     for tx_desc in descendants:
         G.add_edge(base_tx, tx_desc)
         seen.add(tx_desc)
-        build_graph_pending(tx_desc, G, seen)
+        build_graph_pending(mempoolinfo, tx_desc, G, seen)
 
 
 # Check if tx is eligible for replace by fee
@@ -114,49 +99,51 @@ def signals_rbf(tx):
             return True
     return False
 
-def is_replaceable(tx):
+
+def is_replaceable(mempoolinfo, tx):
 
     if mempoolinfo[tx]['signals_rbf']:
         return True
 
     for parent in mempoolinfo[tx]['depends']:
-        if is_replaceable(parent):
+        if is_replaceable(mempoolinfo, parent):
             return True
 
     return False
 
 
 # Fee in Satoshis
-def get_tx_fee(tx):
-    return mempoolinfo[tx]['fee']*COIN
+def get_tx_fee(txinfo):
+    return txinfo['fee']*COIN
 
 
 # In Sat/Byte
-def get_tx_feerate(tx):
-    return float(mempoolinfo[tx]['fee'])*COIN/mempoolinfo[tx]['size']
-    # return float(mempoolinfo[tx]['ancestorfees'])*100000000.0/mempoolinfo[tx]['size']
+def get_tx_feerate(txinfo):
+    return float(txinfo['fee'])*COIN/txinfo['size']
+    # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
 
 
 # Going to add 1 to Tx age to avoid problems with log(time_delta) < 1
-def get_tx_age_minutes(tx):
-    return (time.time()-mempoolinfo[tx]['time'])/60.0+1.0
+def get_tx_age_minutes(txinfo):
+    return (time.time()-txinfo['time'])/60.0+1.0
 
 
 def fee_to_node_size(fee):
     return min(1+math.log(fee, 2)*10, 1000)
 
 
-def tx_to_node_size(tx):
-    return min(1+mempoolinfo[tx]['size']/10.0, 2000)
+def tx_to_node_size(txinfo):
+    return min(1+txinfo['size']/10.0, 2000)
 
 
-def add_to_graph(tx):
+def add_to_graph(G, mempoolinfo, tx):
     G.add_node(tx)
     seen = set([tx])
-    build_graph_func(tx, G, seen)
+    build_graph_func(mempoolinfo, tx, G, seen)
     return seen
 
 
+# FIXME
 def draw_tx_simple():
     # positions for all nodes
     pos = graphviz_layout(G, prog='dot')
@@ -179,11 +166,11 @@ def follow_link(tx):
 
 
 # Probably did not do this right
-def animate_graph(title=None):
+def animate_graph(G, mempoolinfo, args, title=None):
     # First exec needs to show()
     plt.ion()
     fig, ax = plt.gcf(), plt.gca()
-    draw_on_graph(ax, fig, title=title)
+    draw_on_graph(G, mempoolinfo, args, ax, fig, title=title)
     ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
     ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
     plt.gca().invert_xaxis()
@@ -193,12 +180,9 @@ def animate_graph(title=None):
         plt.pause(.1)
         plt.clf()
 
-        load_mempool(update_diff=True)
+        mempoolinfo = update_graph(G, mempoolinfo)
 
-        if blocktemplatetxs:
-            load_bt_txs()
-
-        draw_on_graph(ax, fig, title=title)
+        draw_on_graph(G, mempoolinfo, args, ax, fig, title=title)
         ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
         ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
         plt.gca().invert_xaxis()
@@ -208,7 +192,7 @@ def animate_graph(title=None):
 
 # Make nodes clickable. Have to find nearest neighbor to mouse
 # and then make sure it's close enough to make sense
-def setup_events(fig, ax):
+def setup_events(G, mempoolinfo, fig, ax):
 
     def getXRange():
         xmax, xmin = ax.get_xlim()
@@ -249,7 +233,7 @@ def setup_events(fig, ax):
         # m -> subtract getblocktemplate
         #
         if event.key == 'm':
-            for tx in blocktemplatetxs:
+            for tx in get_bt_txs():
                 if tx in G:
                     try:
                         G.remove_node(tx)
@@ -258,7 +242,7 @@ def setup_events(fig, ax):
             if not G:
                 print("Mempool is empty without getblocktemplate")
             else:
-                draw_mempool_graph(title='Mempool without getblocktemplate', preserve_scale=True)
+                draw_mempool_graph(G, mempoolinfo, args, title='Mempool without getblocktemplate', preserve_scale=True)
 
     fig.canvas.mpl_connect('button_press_event', onClick)
     fig.canvas.mpl_connect('key_press_event', keyPress)
@@ -267,11 +251,10 @@ def setup_events(fig, ax):
 def setup_fig():
     fig, ax = plt.subplots(1)
     fig.set_size_inches(12, 8, forward=True)
-    setup_events(fig, ax)
     return fig, ax
 
 
-def draw_mempool_graph(title=None, draw_labels=False, preserve_scale=False):
+def draw_mempool_graph(G, mempoolinfo, args, title=None, draw_labels=False, preserve_scale=False):
 
     if preserve_scale:
         old_ylim = plt.gca().get_ylim()
@@ -279,7 +262,9 @@ def draw_mempool_graph(title=None, draw_labels=False, preserve_scale=False):
 
     fig, ax = setup_fig()
 
-    draw_on_graph(ax, fig, title=title, draw_labels=draw_labels)
+    setup_events(G, mempoolinfo, fig, ax)
+
+    draw_on_graph(G, mempoolinfo, args, ax, fig, title=title, draw_labels=draw_labels)
 
     ax.get_xaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
     ax.get_yaxis().set_major_formatter(StrMethodFormatter('{x:.1f}'))
@@ -292,43 +277,39 @@ def draw_mempool_graph(title=None, draw_labels=False, preserve_scale=False):
     plt.show()
 
 
-def draw_on_graph(ax, fig, title=None, draw_labels=False):
-    tx_fees = {tx: get_tx_feerate(tx) for tx in G}
-    # tx_fees = {tx: get_tx_fee(tx) for tx in G}
-    max_fee = max(tx_fees.values())
-    min_fee = min(tx_fees.values())
+def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
 
-    tx_ages = {tx: get_tx_age_minutes(tx) for tx in G}
-    max_age = max(tx_ages.values())
-    min_age = min(tx_ages.values())
+    tx_fees = {tx: get_tx_feerate(mempoolinfo[tx]) for tx in G}
+    min_fee, max_fee = min(tx_fees.values()), max(tx_fees.values())
+
+    tx_ages = {tx: get_tx_age_minutes(mempoolinfo[tx]) for tx in G}
+    min_age, max_age = min(tx_ages.values()), max(tx_ages.values())
 
     G.position = {tx: (tx_ages[tx], tx_fees[tx]) for tx in G}
 
-    # Nodesize by fee-rate
-    # nodesize = [fee_to_node_size(tx_fees[tx]) for tx in G]
-
     # Nodesize by tx size
-    nodesize = [tx_to_node_size(tx) for tx in G]
+    nodesize = [tx_to_node_size(mempoolinfo[tx]) for tx in G]
 
     # Lable as txid
     nodelabels = {tx: tx[:4] for tx in G}
 
-    # If color-rbf
-
     # Node color has in or out of block template
-
+    # FIXME - multiple colors
     handles = []
-    if rbf_txs:
+    highlight = args.hltxs if args.hltxs else []
+    if args.colorrbf:
+        rbf_txs = get_rbf_txs(mempoolinfo)
         nodecolors = ['g' if tx in rbf_txs else 'r' for tx in G]
-        green_patch = mpatches.Patch(color='green', label='Tx RBF Eligible')
+        green_patch = mpatches.Patch(color='green', label='Bip125-Replaceable Tx')
         handles.append(green_patch)
-    elif blocktemplatetxs:
+    elif args.colorbt:
+        blocktemplatetxs = get_bt_txs()
         nodecolors = ['g' if tx in highlight else 'b' if tx in blocktemplatetxs else 'r' for tx in G]
-        blue_patch = mpatches.Patch(color='blue', label='Tx in getblocktemplate')
+        blue_patch = mpatches.Patch(color='blue', label='getblocktemplate Tx')
         handles.append(blue_patch)
     else:
         nodecolors = ['g' if tx in highlight else 'r' for tx in G]
-        if highlight:
+        if args.hltxs:
             green_patch = mpatches.Patch(color='green', label='Input Tx')
             handles.append(green_patch)
     red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
@@ -357,24 +338,14 @@ def draw_on_graph(ax, fig, title=None, draw_labels=False):
     if draw_labels:
         nx.draw_networkx_labels(G, pos, labels=nodelabels, font_size=4)
 
-    if fee_estimates:
+    if args.nestimatefee:
+        n = args.nestimatefee
+        fee_estimates = {n: float(rpc.estimatesmartfee(n)['feerate'])*COIN/1000.0}
         for conf, fee in fee_estimates.items():
             plt.axhline(fee, color='k', linestyle='--')
 
 
-def stats():
-    # TODO
-    mlen = len(mempoolinfo)
-    tx_fees = [get_tx_feerate(tx) for tx in mempoolinfo]
-    max_fee, min_fee, avg_fee, med_fee = max(tx_fees), min(tx_fees), sum(tx_fees)/len(tx_fees), median(tx_fees)
-    tx_ages = [get_tx_age_minutes(tx) for tx in mempoolinfo]
-    max_age, min_age, avg_age, med_age = max(tx_ages), min(tx_ages), sum(tx_ages)/len(tx_ages), median(tx_ages)
-    tx_size = [tx_info['size'] for tx_info in mempoolinfo.values()]
-    max_size, min_size, avg_size, med_size = max(tx_size), min(tx_size), sum(tx_size)/len(tx_size), median(tx_size)
-
-
-
-def tx_filter(tx,
+def tx_filter(tx_info,
               minfee=0.0, maxfee=21000000,
               minfeerate=0, maxfeerate=21000000,
               minancestors=1, maxancestors=26,
@@ -387,83 +358,73 @@ def tx_filter(tx,
         print("Unrecognized filters: %s" % kwargs)
         assert(False)
 
-    tx_info = mempoolinfo[tx]
-
     # For setting max relations it gets a little complicated
     max_related = min(maxancestors, maxdescendants)
     package_size = tx_info['ancestorcount'] + tx_info['descendantcount'] - 1
 
     return ((minfee <= tx_info['fee']*COIN <= maxfee) and
-            (minfeerate <= get_tx_feerate(tx) <= maxfeerate) and
+            (minfeerate <= get_tx_feerate(tx_info) <= maxfeerate) and
             (minancestors <= tx_info['ancestorcount']) and
             (mindescendants <= tx_info['descendantcount']) and
             (package_size <= max_related) and
-            (minage <= get_tx_age_minutes(tx) <= maxage) and
+            (minage <= get_tx_age_minutes(tx_info) <= maxage) and
             (minheight <= tx_info['height'] <= maxheight) and
             (minsize <= tx_info['size'] <= maxsize))
 
 
-def make_mempool_graph(txlimit=15000, **kwargs):
-    mempoolinfo_cp = copy.deepcopy(mempoolinfo)
+def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
+
+    G = nx.DiGraph()
     added = 0
-    while added < txlimit:
-        try:
-            tx = next(iter(mempoolinfo_cp))
-        except StopIteration:
-            break
-        if tx_filter(tx, **kwargs):
-            # Will pull in all related ancestor/descendant transcations
-            seen = add_to_graph(tx)
+
+    if only_txs:
+        print("only adding %s" % only_txs)
+        for tx in only_txs:
+            seen = add_to_graph(G, mempoolinfo, tx)
             added += len(seen)
-            # Remove these from our mempool copy so we don't duplicate
-            for tx in seen:
+    else:
+        mempoolinfo_cp = copy.deepcopy(mempoolinfo)
+        while added < txlimit:
+            try:
+                tx = next(iter(mempoolinfo_cp))
+            except StopIteration:
+                break
+            if tx_filter(mempoolinfo[tx], **kwargs):
+                # Will pull in all related ancestor/descendant transcations
+                seen = add_to_graph(G, mempoolinfo, tx)
+                added += len(seen)
+                # Remove these from our mempool copy so we don't duplicate
+                for tx in seen:
+                    mempoolinfo_cp.pop(tx, None)
+            else:
                 mempoolinfo_cp.pop(tx, None)
-        else:
-            mempoolinfo_cp.pop(tx, None)
 
     print("Filtered down to %s txs" % len(G))
     return G if added else None
-
-
-# Load fee estimates
-def load_fee_estimates(n):
-    global fee_estimates
-    fee_estimates = {n: float(rpc.estimatesmartfee(n)['feerate'])*COIN/1000.0}
 
 
 # Load RBF transactions
 #
 # Much faster if used with PR #12676
 #
-def load_rbf_txs():
-
-    global rbf_txs
-    rbf_txs.clear()
-
+def get_rbf_txs(mempoolinfo):
     if 'bip125-replaceable' in next(iter(mempoolinfo.values())):
         print("Using new bip125-replaceable flag!")
-        rbf_txs = set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable'] == "yes"])
+        return set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable'] == "yes"])
     else:
         print("WARNING! Calculating replace-by-fee txs is expensive!")
+        rbf_txs = set()
         for tx in G:
             mempoolinfo[tx]['signals_rbf'] = signals_rbf(tx)
         for tx in G:
-            if is_replaceable(tx):
+            if is_replaceable(mempoolinfo, tx):
                 rbf_txs.add(tx)
+        return rbf_txs
 
 
 # Load block template transactions
-def load_bt_txs():
-    global blocktemplatetxs
-    blocktemplatetxs.clear()
-    bt_weight = 0
-    bt_fees = 0.0
-
-    # Need to include segwit txs in block template
-    block_template_txs = rpc.getblocktemplate(json.dumps({"rules": ["segwit"]}))['transactions']
-
-    for tx in block_template_txs:
-        blocktemplatetxs.add(tx['txid'])
+def get_bt_txs():
+    return set([tx['txid'] for tx in rpc.getblocktemplate(json.dumps({"rules": ["segwit"]}))['transactions']])
 
 
 def test_bt():
@@ -478,149 +439,114 @@ def test_bt():
     print("Got weight: %s | txs: %s | fees: %s | sigops: %s" % (weight, len(txs), fee, sigops))
 
 
+def get_mempool():
+    return rpc.getrawmempool('true')
 
-# Load mempool transactions
-def load_mempool(snapshot=None, update_diff=False):
 
-    global mempoolset
-    global mempoolinfo
+def update_graph(G, old_mempool):
 
-    if update_diff:
-        old_set = mempoolset
+    old_set = set(old_mempool)
+    mempoolinfo = get_mempool()
+    new_set = set(mempoolinfo.keys())
 
-    if snapshot:
-        print("Using snapshot %s" % snapshot)
-        mempoolinfo = json.load(open(snapshot), parse_float=decimal.Decimal)
-    else:
-        mempoolinfo = rpc.getrawmempool('true')
+    # Just add the tx differences to the graph
+    added = new_set - old_set
+    print("There are %s new Txs in mempool" % len(added))
+    for tx in added:
+        add_to_graph(G, mempoolinfo, tx)
 
-    mempoolset = set(mempoolinfo.keys())
-
-    # This should be _okay_
-    #
-    # We only display mempoolinfo, so if we call getblocktemplate after getrawmempool
-    # and there exists stuff in getblocktemplate that does not exists in mempool, it's
-    # not drawn anyway and just means we are only drawing a subset of the valid block template
-    """
-    if blocktemplatetxs:
-        pass
-        diff = blocktemplatetxs-mempoolset
-        if diff:
-            print("Diff is %s" % len(diff))
-    """
-
-    # Remove old nodes from the graph
-    if update_diff:
-        diff = mempoolset-old_set
-        print("There are %s new Txs in mempool" % len(diff))
-        # Just add the tx differences to the graph
-        for tx in diff:
-            add_to_graph(tx)
-
-        # And remove the old
-        removed = old_set-mempoolset
-        print("There are %s Txs removed from mempool" % len(removed))
-        for tx in removed:
-            try:
-                G.remove_node(tx)
-            except:
-                pass
+    # And remove the old
+    removed = old_set - new_set
+    print("There are %s Txs removed from mempool" % len(removed))
+    for tx in removed:
+        try:
+            G.remove_node(tx)
+        except:
+            pass
 
     print("Size of mempool is %s txs" % len(mempoolinfo))
+    return mempoolinfo
 
 
-def main():
+def stats(mempoolinfo):
+    # TODO
+    mlen = len(mempoolinfo)
+    tx_fees = [get_tx_feerate(tx) for tx in mempoolinfo]
+    max_fee, min_fee, mean_fee, med_fee = max(tx_fees), min(tx_fees), mean(tx_fees), median(tx_fees)
+    tx_ages = [get_tx_age_minutes(tx) for tx in mempoolinfo]
+    max_age, min_age, mean_age, med_age = max(tx_ages), min(tx_ages), mean(tx_ages), median(tx_ages)
+    tx_size = [tx_info['size'] for tx_info in mempoolinfo.values()]
+    max_size, min_size, mean_size, med_size = max(tx_size), min(tx_size), mean(tx_size), median(tx_size)
 
-    # Parse arguments and pass through unrecognised args
-    parser = argparse.ArgumentParser(add_help=True,
-                                     usage='%(prog)s [options]',
-                                     description='A tool to draw, filter, and animate mempool transactions',
-                                     epilog='''Help text and arguments for individual test script:''',
-                                     formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
-    parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
-    parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
-    parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
-    parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate txs different')
-    parser.add_argument('--colorrbf', action='store_true', help='Color txs eligible for replace-by-fee different. VERY SLOW, Dont use with animate')
-    parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
-    parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
-    parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
-    parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
-    parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
-    parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
-    parser.add_argument('--minfeerate', type=float, help='Min fee rate in satoshis/byte')
-    parser.add_argument('--maxfeerate', type=float, help='Max fee rate in satoshis/byte')
-    parser.add_argument('--minheight', type=int, help='Min block height')
-    parser.add_argument('--maxheight', type=int, help='Max block height')
-    parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
-    parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
-    parser.add_argument('--minage', type=float, help='Min tx age in seconds')
-    parser.add_argument('--maxage', type=float, help='Max tx age in seconds')
-    parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
-    parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
-    parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
-    parser.add_argument('--maxancestors', type=int, help='Max tx ancestors')
-    args, unknown_args = parser.parse_known_args()
+# Parse arguments and pass through unrecognised args
+parser = argparse.ArgumentParser(add_help=True,
+                                 usage='%(prog)s [options]',
+                                 description='A tool to draw, filter, and animate mempool transactions',
+                                 epilog='''Help text and arguments for individual test script:''',
+                                 formatter_class=argparse.RawTextHelpFormatter)
 
-    if unknown_args:
-        print("Unknown args: %s...Try" % unknown_args)
-        print("./draw_mempool.py --help")
-        return
+parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
+parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
+parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
+parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate txs different')
+parser.add_argument('--colorrbf', action='store_true', help='Color txs eligible for replace-by-fee different. VERY SLOW, Dont use with animate')
+parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
+parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
+parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
+parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
+parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
+parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
+parser.add_argument('--minfeerate', type=float, help='Min fee rate in satoshis/byte')
+parser.add_argument('--maxfeerate', type=float, help='Max fee rate in satoshis/byte')
+parser.add_argument('--minheight', type=int, help='Min block height')
+parser.add_argument('--maxheight', type=int, help='Max block height')
+parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
+parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
+parser.add_argument('--minage', type=float, help='Min tx age in seconds')
+parser.add_argument('--maxage', type=float, help='Max tx age in seconds')
+parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
+parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
+parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
+parser.add_argument('--maxancestors', type=int, help='Max tx ancestors')
+args, unknown_args = parser.parse_known_args()
 
-    # Min/max options
-    filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
+if unknown_args:
+    print("Unknown args: %s...Try" % unknown_args)
+    print("./draw_mempool.py --help")
+    sys.exit(0)
 
-    global rpc
-    rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
+# Min/max options
+filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
 
-    global highlight
-    if args.hltxs:
-        highlight = args.hltxs
+# Communicate with bitcoind like bitcoin test_framework
+rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
 
-    global fee_estimates
-    if args.nestimatefee:
-        load_fee_estimates(args.nestimatefee)
-
-    # Load mempool from rpc or snaphsot
-    load_mempool(args.snapshot)
-
-    if args.stats:
-        stats()
-        return
-
-    # Load block template if passed in
-    if args.colorbt:
-        load_bt_txs()
-
-    set_build_graph_func()
-
+# Load mempool from rpc or snaphsot
+if args.snapshot:
     try:
-        # Draw individual transactions or entire mempool graph with filters
-        if args.txs:
-            for tx in args.txs:
-                highlight.append(tx)
-                add_to_graph(tx)
-                draw_mempool_graph()
-        else:
-            make_mempool_graph(txlimit=args.txlimit, **filter_options)
-
-            if not G:
-                print("Filtered out all transactions, nothing to draw")
-                return
-
-            # Load rbf txs if passed in
-            # Only look at ones in filtered mempool since operation is expensive
-            if args.colorrbf:
-                load_rbf_txs()
-
-            if args.animate:
-                animate_graph(title='Live Mempool!')
-            else:
-                draw_mempool_graph(title='Mempool Filtered')
-    except KeyboardInterrupt:
+        mempoolinfo = json.load(open(args.snapshot), parse_float=decimal.Decimal)
+    except Exception as e:
+        print("Error reading snapshot json: %s" % str(e))
         sys.exit(0)
+else:
+    mempoolinfo = get_mempool()
 
-if __name__ == "__main__":
-    main()
+if args.stats:
+    stats()
+    sys.exit(0)
+
+set_build_graph_func(mempoolinfo)
+
+try:
+    G = make_mempool_graph(mempoolinfo, only_txs=args.hltxs, txlimit=args.txlimit, **filter_options)
+    if not G:
+        print("Filtered out all transactions, nothing to draw")
+        sys.exit(0)
+    if args.animate:
+        animate_graph(G, mempoolinfo, args, title='Live Mempool!')
+    else:
+        draw_mempool_graph(G, mempoolinfo, args, title='Mempool Filtered')
+except KeyboardInterrupt:
+    sys.exit(0)
