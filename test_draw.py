@@ -14,7 +14,7 @@ Test transaction graph
                        \  /   \/
                         tx10   tx11
 """
-import draw_mempool
+from draw_mempool import make_mempool_graph, draw_txs_simple, draw_mempool_graph
 from decimal import Decimal
 
 mempoolinfo = {
@@ -33,21 +33,17 @@ mempoolinfo = {
 }
 
 
-# Set mempool manually
-draw_mempool.set_mempool(mempoolinfo)
 # Add tx to graph
-draw_mempool.add_to_graph('0008')
-# Draw!
-draw_mempool.draw_tx_simple()
-draw_mempool.draw_mempool_graph()
+G = make_mempool_graph(mempoolinfo)
 
-# Remove 'spentby' field and make sure everything still works
-for tx in mempoolinfo:
-    del mempoolinfo[tx]['spentby']
+# Draw simple
+draw_txs_simple(G, mempoolinfo)
 
-# Set mempool manually
-draw_mempool.set_mempool(mempoolinfo)
-# Add tx to graph
-draw_mempool.add_to_graph('0008')
-# Draw!
-draw_mempool.draw_mempool_graph()
+# Draw complicated
+class Args:
+    hltxs = False
+    colorrbf = False
+    colorbt = False
+    nestimatefee = False
+
+draw_mempool_graph(G, mempoolinfo, Args)

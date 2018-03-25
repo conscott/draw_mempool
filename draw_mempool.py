@@ -21,34 +21,34 @@ from statistics import median, mean
 COIN = 100000000
 
 # Max sequene
-MAX_SEQUENCE = (0xffffffff-1)
+MAX_RBF_SEQUENCE = (0xffffffff-1)
 
 # For looking at TX in blockchain.inf on double click
 URL_SCHEME = "https://blockchain.info/tx/{}"
 
-# Hack until my #12479 is merged!
-build_graph_func = None
+# Different depending on if #12479 is merged
+build_tx_package_func = None
 
 
 # For testing purposes
 def set_mempool(mempool):
     global mempoolinfo
     mempoolinfo = mempool
-    set_build_graph_func(mempoolinfo)
+    set_build_tx_package_func(mempoolinfo)
 
 
 # Set which function to use when building graphs. This indirection
 # Can be resolved if my PR adding child relations to getrawmempool output is
 # being used in bitcoind
-def set_build_graph_func(mempoolinfo):
-    global build_graph_func
+def set_build_tx_package_func(mempoolinfo):
+    global build_tx_package_func
     randtx = next(iter(mempoolinfo.values()))
     if 'spentby' in randtx:
         # print("Using fast graph build function")
-        build_graph_func = build_graph_pending
+        build_tx_package_func = build_tx_package_pending
     else:
         # print("Using legacy graph build function")
-        build_graph_func = build_graph_legacy
+        build_tx_package_func = build_tx_package_legacy
 
 
 # Only needed if 'spentby' is not present
@@ -58,7 +58,7 @@ def find_descendants(mempoolinfo, tx, exclude=set()):
 
 
 # Required if Tx does not have `spentby` in getrawmempool output
-def build_graph_legacy(mempoolinfo, base_tx, G, seen):
+def build_tx_package_legacy(mempoolinfo, base_tx, G, seen):
     # Iterate through ancestors
     base_info = mempoolinfo[base_tx]
     anscestor = [tx for tx in base_info['depends'] if tx not in seen]
@@ -66,40 +66,42 @@ def build_graph_legacy(mempoolinfo, base_tx, G, seen):
         # print("Adding ancestor edge %s -> %s, seen %s" % (tx_ans, base_tx, list(seen)))
         G.add_edge(tx_ans, base_tx)
         seen.add(tx_ans)
-        build_graph_legacy(mempoolinfo, tx_ans, G, seen)
+        build_tx_package_legacy(mempoolinfo, tx_ans, G, seen)
     if base_info['descendantcount'] > 1:
         for tx_desc in find_descendants(mempoolinfo, base_tx, exclude=seen):
             # print("Adding descendent edge %s -> %s" % (tx_ans, tx_desc))
             G.add_edge(base_tx, tx_desc)
             seen.add(tx_desc)
-            build_graph_legacy(mempoolinfo, tx_desc, G, seen)
+            build_tx_package_legacy(mempoolinfo, tx_desc, G, seen)
 
 
-# Build a Tx graph the smart way - but requires patch to bitcoin that is pending
-def build_graph_pending(mempoolinfo, base_tx, G, seen):
+# Build a Tx graph the smart way - but requires PR #12479
+def build_tx_package_pending(mempoolinfo, base_tx, G, seen):
     base_info = mempoolinfo[base_tx]
     anscestor = [tx for tx in base_info['depends'] if tx not in seen]
     for tx_ans in anscestor:
         G.add_edge(tx_ans, base_tx)
         seen.add(tx_ans)
-        build_graph_pending(mempoolinfo, tx_ans, G, seen)
+        build_tx_package_pending(mempoolinfo, tx_ans, G, seen)
 
     descendants = [tx for tx in base_info['spentby'] if tx not in seen]
     for tx_desc in descendants:
         G.add_edge(base_tx, tx_desc)
         seen.add(tx_desc)
-        build_graph_pending(mempoolinfo, tx_desc, G, seen)
+        build_tx_package_pending(mempoolinfo, tx_desc, G, seen)
 
 
-# Check if tx is eligible for replace by fee
-# Need to check tx itself all ancestors
+# Signals RBF if any one of inputs has sequence number
+# Less than 0xffffff-1
 def signals_rbf(tx):
     for vin in rpc.getrawtransaction(tx, 'true')['vin']:
-        if vin['sequence'] < MAX_SEQUENCE:
+        if vin['sequence'] < MAX_RBF_SEQUENCE:
             return True
     return False
 
 
+# Bip-125 replaceable if this tx or any of it's ancestors
+# explicitly signal RBF
 def is_replaceable(mempoolinfo, tx):
 
     if mempoolinfo[tx]['signals_rbf']:
@@ -128,27 +130,30 @@ def get_tx_age_minutes(txinfo):
     return (time.time()-txinfo['time'])/60.0+1.0
 
 
+# Make tx node size by fee
 def fee_to_node_size(fee):
-    return min(1+math.log(fee, 2)*10, 1000)
+    return min(1+math.log(fee, 2)*10, 2000)
 
 
+# Max tx node size by size in bytes
 def tx_to_node_size(txinfo):
     return min(1+txinfo['size']/10.0, 2000)
 
 
+# Add a tx and all it's relatives to the graph
 def add_to_graph(G, mempoolinfo, tx):
     G.add_node(tx)
     seen = set([tx])
-    build_graph_func(mempoolinfo, tx, G, seen)
+    build_tx_package_func(mempoolinfo, tx, G, seen)
     return seen
 
 
-# FIXME
-def draw_tx_simple():
+# Draw just the transaction relations in nice spatial representation
+def draw_txs_simple(G, mempoolinfo):
     # positions for all nodes
     pos = graphviz_layout(G, prog='dot')
-    fees = [get_tx_feerate(tx) for tx in G]
-    nodesize = [tx_to_node_size(tx) for tx in G]
+    fees = [get_tx_feerate(mempoolinfo[tx]) for tx in G]
+    nodesize = [tx_to_node_size(mempoolinfo[tx]) for tx in G]
     nodecolors = [1 for f in fees]
     nx.draw_networkx_nodes(G, pos, node_color=nodecolors, node_size=nodesize, cmap=plt.cm.Reds_r)
     nx.draw_networkx_edges(G, pos, edgelist=G.edges(data=True), arrow_size=10, width=3)
@@ -165,7 +170,7 @@ def follow_link(tx):
     subprocess.call(cmd.split(), stdout=FNULL, stderr=subprocess.STDOUT)
 
 
-# Probably did not do this right
+# Animate!
 def animate_graph(G, mempoolinfo, args, title=None):
     # First exec needs to show()
     plt.ion()
@@ -215,7 +220,7 @@ def setup_events(G, mempoolinfo, fig, ax):
             print("\nSelected Tx : %s" % node)
             print("Size          : %s" % mempoolinfo[node]['size'])
             print("Fee           : %s" % mempoolinfo[node]['fee'])
-            print("FeeRate       : %s" % get_tx_feerate(node))
+            print("FeeRate       : %s" % get_tx_feerate(mempoolinfo[node]))
             return node
 
     def onClick(event):
@@ -389,7 +394,12 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
                 tx = next(iter(mempoolinfo_cp))
             except StopIteration:
                 break
-            if tx_filter(mempoolinfo[tx], **kwargs):
+            try:
+                should_add = tx_filter(mempoolinfo[tx], **kwargs)
+            except:
+                # Only breaks in test mode
+                should_add = True
+            if should_add:
                 # Will pull in all related ancestor/descendant transcations
                 seen = add_to_graph(G, mempoolinfo, tx)
                 added += len(seen)
@@ -537,7 +547,7 @@ if args.stats:
     stats()
     sys.exit(0)
 
-set_build_graph_func(mempoolinfo)
+set_build_tx_package_func(mempoolinfo)
 
 try:
     G = make_mempool_graph(mempoolinfo, only_txs=args.hltxs, txlimit=args.txlimit, **filter_options)
