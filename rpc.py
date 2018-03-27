@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import decimal
-import http.client
 import json
-import os
 import re
 import subprocess
 JSONDecodeError = getattr(json, "JSONDecodeError", ValueError)
@@ -13,6 +11,17 @@ to python primitives.
 
 This has been copied almost directly from the bitcoin test_framework
 """
+
+
+class JSONRPCException(Exception):
+    def __init__(self, rpc_error):
+        try:
+            errmsg = '%(message)s (%(code)i)' % rpc_error
+        except (KeyError, TypeError):
+            errmsg = ''
+        super().__init__(errmsg)
+        self.error = rpc_error
+
 
 class NodeCLIAttr:
     def __init__(self, cli, command):
@@ -25,6 +34,7 @@ class NodeCLIAttr:
     def get_request(self, *args, **kwargs):
         return lambda: self(*args, **kwargs)
 
+
 class NodeCLI():
     """Interface to bitcoin-cli for an individual node"""
 
@@ -35,8 +45,8 @@ class NodeCLI():
         self.input = None
 
     def __call__(self, *options, input=None):
-        # TestNodeCLI is callable with bitcoin-cli command-line options
-        cli = TestNodeCLI(self.binary)
+        # NodeCLI is callable with bitcoin-cli command-line options
+        cli = NodeCLI(self.binary)
         cli.options = [str(o) for o in options]
         cli.input = input
         return cli
@@ -47,10 +57,10 @@ class NodeCLI():
     def batch(self, requests):
         results = []
         for request in requests:
-           try:
-               results.append(dict(result=request()))
-           except JSONRPCException as e:
-               results.append(dict(error=e))
+            try:
+                results.append(dict(result=request()))
+            except JSONRPCException as e:
+                results.append(dict(error=e))
         return results
 
     def send_cli(self, command=None, *args, **kwargs):
@@ -67,7 +77,7 @@ class NodeCLI():
         if command is not None:
             p_args += [command]
         p_args += pos_args + named_args
-        #print("CALL: %s" % p_args)
+        # print("CALL: %s" % p_args)
         process = subprocess.Popen(p_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         cli_stdout, cli_stderr = process.communicate(input=self.input)
         returncode = process.poll()
