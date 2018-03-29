@@ -125,6 +125,10 @@ def get_tx_feerate(txinfo):
     # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
 
 
+def get_ancestor_feerate(txinfo):
+    return float(txinfo['ancestorfees'])/txinfo['ancestorsize']
+    # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
+
 # Going to add 1 to Tx age to avoid problems with log(time_delta) < 1
 def get_tx_age_minutes(txinfo):
     return (time.time()-txinfo['time'])/60.0+1.0
@@ -300,23 +304,29 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
 
     # Node color has in or out of block template
     # FIXME - multiple colors
-    handles = []
+    handles, rbf_txs, blocktemplatetxs, cpfp_txs = [], [], [], []
     highlight = args.hltxs if args.hltxs else []
-    if args.colorrbf:
+    if args.color_rbf:
         rbf_txs = get_rbf_txs(mempoolinfo)
-        nodecolors = ['g' if tx in rbf_txs else 'r' for tx in G]
-        green_patch = mpatches.Patch(color='green', label='Bip125-Replaceable Tx')
+        green_patch = mpatches.Patch(color='green', label='Replaceable Tx')
         handles.append(green_patch)
-    elif args.colorbt:
+    if args.color_bt:
         blocktemplatetxs = get_bt_txs()
-        nodecolors = ['g' if tx in highlight else 'b' if tx in blocktemplatetxs else 'r' for tx in G]
-        blue_patch = mpatches.Patch(color='blue', label='getblocktemplate Tx')
+        blue_patch = mpatches.Patch(color='blue', label='Block template Tx')
         handles.append(blue_patch)
-    else:
-        nodecolors = ['g' if tx in highlight else 'r' for tx in G]
-        if args.hltxs:
-            green_patch = mpatches.Patch(color='green', label='Input Tx')
-            handles.append(green_patch)
+    if args.color_cpfp:
+        cpfp_txs = get_cpfp_txs(mempoolinfo)
+        cyan_patch = mpatches.Patch(color='cyan', label='CPFP Tx')
+        handles.append(cyan_patch)
+    if args.hltxs:
+        yellow_patch = mpatches.Patch(color='yellow', label='Input Tx')
+        handles.append(yellow_patch)
+
+    nodecolors = ['b' if tx in blocktemplatetxs else 
+                  'c' if tx in cpfp_txs else
+                  'g' if tx in rbf_txs else
+                  'y' if tx in highlight else
+                  'r' for tx in G]
     red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
     handles.append(red_patch)
     plt.legend(handles=handles)
@@ -349,6 +359,10 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
         for conf, fee in fee_estimates.items():
             plt.axhline(fee, color='k', linestyle='--')
 
+    plt.axvline(get_best_blocktime(), color='k', linestyle='--')
+
+def get_best_blocktime():
+    return (time.time()-rpc.getblock(rpc.getbestblockhash())['time'])/60.0+1.0
 
 def tx_filter(tx_info,
               minfee=0.0, maxfee=21000000,
@@ -411,6 +425,12 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
 
     print("Filtered down to %s txs" % len(G))
     return G if added else None
+
+
+# Find eligible CPFP transactions
+def get_cpfp_txs(mempoolinfo):
+    return [tx for tx, txinfo in mempoolinfo.items() 
+            if txinfo['ancestorcount'] > 1 and get_ancestor_feerate(txinfo) < get_tx_feerate(txinfo)]
 
 
 # Load RBF transactions
@@ -500,8 +520,9 @@ parser.add_argument('--stats', action='store_true', help='Get advanced mempool s
 parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
 parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
 parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
-parser.add_argument('--colorbt', action='store_true', help='Color getblocktemplate txs different')
-parser.add_argument('--colorrbf', action='store_true', help='Color txs eligible for replace-by-fee different. VERY SLOW, Dont use with animate')
+parser.add_argument('--color_bt', action='store_true', help='Color getblocktemplate txs different')
+parser.add_argument('--color_rbf', action='store_true', help='Color txs eligible for replace-by-fee different.')
+parser.add_argument('--color_cpfp', action='store_true', help='Color txs eligible for "Child Pays for Parent" (CPFP).')
 parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
 parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
 parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')

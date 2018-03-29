@@ -1,7 +1,7 @@
 ## Draw Mempool !
 
 A tool to draw and inspect mempool transactions and their dependencies. This currently
-requires a locally running version of bitcoind and will use `bitcoin-cli` to poll
+requires a locally running version of bitcoind and will use `bitcoin-cli` to pull
 for mempool info and block template info.
 
 
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ```
 
 ### Installion Mac / Windows
-TODO
+Submit a PR and tell me :)
 
 ### Try it out
 ```
@@ -31,17 +31,16 @@ source .venv/bin/activate
 
 ### Examples
 ```
-# Only show transactions with dependencies
+# Only show transactions with ancestor dependencies
 ./draw_mempool.py --minancestors=2 --minfeerate=20 --maxage=60  
 
 # Show high fee transactions
 ./draw_mempool.py --minfeerate=500
 
 # Animate live mempool, coloring tx's to be included in next block as blue
-./draw_mempool.py --maxage=10 --animate --colorbt
+./draw_mempool.py --maxage=10 --animate --color_bt
 ```
 
 ### TODO
-- Switch to logging
 - Make verticle line on X-axis for when blocks were produced
 - Calculate optimal blockfee based on mempool graph and compare to getblocktemplate
