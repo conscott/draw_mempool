@@ -125,13 +125,15 @@ def get_tx_feerate(txinfo):
     # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
 
 
+# For CPFP
 def get_ancestor_feerate(txinfo):
     return float(txinfo['ancestorfees'])/txinfo['ancestorsize']
     # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
 
+
 # Going to add 1 to Tx age to avoid problems with log(time_delta) < 1
 def get_tx_age_minutes(txinfo):
-    return (time.time()-txinfo['time'])/60.0+1.0
+    return (time.time()-txinfo['time'])/60.0
 
 
 # Make tx node size by fee
@@ -141,7 +143,7 @@ def fee_to_node_size(fee):
 
 # Max tx node size by size in bytes
 def tx_to_node_size(txinfo):
-    return min(1+txinfo['size']/10.0, 2000)
+    return min(1+txinfo['size']/10.0, 20000000)
 
 
 # Add a tx and all it's relatives to the graph
@@ -286,6 +288,38 @@ def draw_mempool_graph(G, mempoolinfo, args, title=None, draw_labels=False, pres
     plt.show()
 
 
+# Color nodes based on kind of tx (RBF, CPFP, etc.)
+def get_nodecolors(mempoolinfo, args, plt):
+    handles, rbf_txs, blocktemplatetxs, cpfp_txs = [], [], [], []
+    highlight = args.hltxs if args.hltxs else []
+    if args.color_rbf:
+        rbf_txs = get_rbf_txs(mempoolinfo)
+        green_patch = mpatches.Patch(color='green', label='Tx Replaceable')
+        handles.append(green_patch)
+    if args.color_bt:
+        blocktemplatetxs = get_bt_txs()
+        blue_patch = mpatches.Patch(color='blue', label='Tx selected by getblocktemplate')
+        handles.append(blue_patch)
+    if args.color_cpfp:
+        cpfp_txs = get_cpfp_txs(mempoolinfo)
+        cyan_patch = mpatches.Patch(color='cyan', label='Tx is CPFP')
+        handles.append(cyan_patch)
+    if args.hltxs:
+        yellow_patch = mpatches.Patch(color='yellow', label='Input Tx')
+        handles.append(yellow_patch)
+
+    nodecolors = ['b' if tx in blocktemplatetxs else
+                  'c' if tx in cpfp_txs else
+                  'g' if tx in rbf_txs else
+                  'y' if tx in highlight else
+                  'r' for tx in G]
+
+    red_patch = mpatches.Patch(color='red', hatch='o', label='Tx in mempool')
+    handles.append(red_patch)
+    plt.legend(handles=handles)
+    return nodecolors
+
+
 def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
 
     tx_fees = {tx: get_tx_feerate(mempoolinfo[tx]) for tx in G}
@@ -294,47 +328,22 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
     tx_ages = {tx: get_tx_age_minutes(mempoolinfo[tx]) for tx in G}
     min_age, max_age = min(tx_ages.values()), max(tx_ages.values())
 
-    G.position = {tx: (tx_ages[tx], tx_fees[tx]) for tx in G}
-
     # Nodesize by tx size
     nodesize = [tx_to_node_size(mempoolinfo[tx]) for tx in G]
 
     # Lable as txid
     nodelabels = {tx: tx[:4] for tx in G}
 
-    # Node color has in or out of block template
-    # FIXME - multiple colors
-    handles, rbf_txs, blocktemplatetxs, cpfp_txs = [], [], [], []
-    highlight = args.hltxs if args.hltxs else []
-    if args.color_rbf:
-        rbf_txs = get_rbf_txs(mempoolinfo)
-        green_patch = mpatches.Patch(color='green', label='Replaceable Tx')
-        handles.append(green_patch)
-    if args.color_bt:
-        blocktemplatetxs = get_bt_txs()
-        blue_patch = mpatches.Patch(color='blue', label='Block template Tx')
-        handles.append(blue_patch)
-    if args.color_cpfp:
-        cpfp_txs = get_cpfp_txs(mempoolinfo)
-        cyan_patch = mpatches.Patch(color='cyan', label='CPFP Tx')
-        handles.append(cyan_patch)
-    if args.hltxs:
-        yellow_patch = mpatches.Patch(color='yellow', label='Input Tx')
-        handles.append(yellow_patch)
-
-    nodecolors = ['b' if tx in blocktemplatetxs else 
-                  'c' if tx in cpfp_txs else
-                  'g' if tx in rbf_txs else
-                  'y' if tx in highlight else
-                  'r' for tx in G]
-    red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
-    handles.append(red_patch)
-    plt.legend(handles=handles)
+    nodecolors = get_nodecolors(mempoolinfo, args, plt)
 
     # Can make the transparency of tx based on....?
     alpha = [0.2 if c is 'r' else 0.5 for c in nodecolors]
 
+    # Going to make log scale, but need to correct
     if (max_age - min_age) > 100:
+        for tx, age in tx_ages.values():
+            if age < 1:
+                tx_ages[tx] = 1.0
         plt.xscale('log')
 
     if max_fee < 5:
@@ -345,6 +354,8 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
     plt.title(title or "Transactions in mempool")
     plt.xlabel("Tx Age in Minutes")
     plt.ylabel("Fee in Sat per Byte")
+
+    G.position = {tx: (tx_ages[tx], tx_fees[tx]) for tx in G}
 
     pos = G.position
     nx.draw_networkx_nodes(G, pos, alpha=alpha, node_color=nodecolors, node_size=nodesize, label='trans')
@@ -359,10 +370,13 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
         for conf, fee in fee_estimates.items():
             plt.axhline(fee, color='k', linestyle='--')
 
-    plt.axvline(get_best_blocktime(), color='k', linestyle='--')
+    if args.lblock:
+        plt.axvline(get_best_blocktime(), color='k', linestyle='--')
+
 
 def get_best_blocktime():
-    return (time.time()-rpc.getblock(rpc.getbestblockhash())['time'])/60.0+1.0
+    return (time.time()-rpc.getblock(rpc.getbestblockhash())['time'])/60.0
+
 
 def tx_filter(tx_info,
               minfee=0.0, maxfee=21000000,
@@ -429,7 +443,7 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
 
 # Find eligible CPFP transactions
 def get_cpfp_txs(mempoolinfo):
-    return [tx for tx, txinfo in mempoolinfo.items() 
+    return [tx for tx, txinfo in mempoolinfo.items()
             if txinfo['ancestorcount'] > 1 and get_ancestor_feerate(txinfo) < get_tx_feerate(txinfo)]
 
 
@@ -519,6 +533,7 @@ parser = argparse.ArgumentParser(add_help=True,
 parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
 parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
 parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+parser.add_argument('--lblock', action='store_true', help='Show time of last mined block')
 parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
 parser.add_argument('--color_bt', action='store_true', help='Color getblocktemplate txs different')
 parser.add_argument('--color_rbf', action='store_true', help='Color txs eligible for replace-by-fee different.')
@@ -578,6 +593,6 @@ try:
     if args.animate:
         animate_graph(G, mempoolinfo, args, title='Live Mempool!')
     else:
-        draw_mempool_graph(G, mempoolinfo, args, title='Mempool Filtered')
+        draw_mempool_graph(G, mempoolinfo, args, title='Mempool')
 except KeyboardInterrupt:
     sys.exit(0)
