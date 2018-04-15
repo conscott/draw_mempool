@@ -298,7 +298,7 @@ def get_nodecolors(mempoolinfo, args, plt):
         handles.append(green_patch)
     if args.color_bt:
         blocktemplatetxs = get_bt_txs()
-        blue_patch = mpatches.Patch(color='blue', label='Tx selected by getblocktemplate')
+        blue_patch = mpatches.Patch(color='blue', label='Tx in getblocktemplate')
         handles.append(blue_patch)
     if args.color_cpfp:
         cpfp_txs = get_cpfp_txs(mempoolinfo)
@@ -315,6 +315,7 @@ def get_nodecolors(mempoolinfo, args, plt):
                   'r' for tx in G]
 
     red_patch = mpatches.Patch(color='red', hatch='o', label='Tx in mempool')
+
     handles.append(red_patch)
     plt.legend(handles=handles)
     return nodecolors
@@ -350,6 +351,8 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
         plt.ylim(0.0, 5)
     elif (max_fee - min_fee) < 10:
         plt.ylim(0.0, max_fee + 5)
+    elif (max_fee - min_fee) > 1000:
+        plt.yscale('log')
 
     plt.title(title or "Transactions in mempool")
     plt.xlabel("Tx Age in Minutes")
@@ -372,6 +375,8 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
 
     if args.lblock:
         plt.axvline(get_best_blocktime(), color='k', linestyle='--')
+
+    ax.grid(True, alpha=0.5)
 
 
 def get_best_blocktime():
@@ -444,7 +449,7 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
 # Find eligible CPFP transactions
 def get_cpfp_txs(mempoolinfo):
     return [tx for tx, txinfo in mempoolinfo.items()
-            if txinfo['ancestorcount'] > 1 and get_ancestor_feerate(txinfo) < get_tx_feerate(txinfo)]
+            if txinfo['ancestorcount'] > 1 and (get_ancestor_feerate(txinfo) + 1.0 < get_tx_feerate(txinfo))]
 
 
 # Load RBF transactions
