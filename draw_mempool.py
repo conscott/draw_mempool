@@ -342,9 +342,11 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
 
     # Going to make log scale, but need to correct
     if (max_age - min_age) > 100:
-        for tx, age in tx_ages.values():
+
+        for tx, age in tx_ages.items():
             if age < 1:
                 tx_ages[tx] = 1.0
+
         plt.xscale('log')
 
     if max_fee < 5:
@@ -555,8 +557,8 @@ parser.add_argument('--minheight', type=int, help='Min block height')
 parser.add_argument('--maxheight', type=int, help='Max block height')
 parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
 parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
-parser.add_argument('--minage', type=float, help='Min tx age in seconds')
-parser.add_argument('--maxage', type=float, help='Max tx age in seconds')
+parser.add_argument('--minage', type=float, help='Min tx age in minutes')
+parser.add_argument('--maxage', type=float, help='Max tx age in minutes')
 parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
 parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
 parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
