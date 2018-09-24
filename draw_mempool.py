@@ -37,9 +37,8 @@ def set_mempool(mempool):
     set_build_tx_package_func(mempoolinfo)
 
 
-# Set which function to use when building graphs. This indirection
-# Can be resolved if my PR adding child relations to getrawmempool output is
-# being used in bitcoind
+# Set which function to use when building dependency graphs.
+# New clients have PR #12479, and are more efficient
 def set_build_tx_package_func(mempoolinfo):
     global build_tx_package_func
     randtx = next(iter(mempoolinfo.values()))
@@ -294,15 +293,15 @@ def get_nodecolors(mempoolinfo, args, plt):
     highlight = args.hltxs if args.hltxs else []
     if args.color_rbf:
         rbf_txs = get_rbf_txs(mempoolinfo)
-        green_patch = mpatches.Patch(color='green', label='Tx Replaceable')
+        green_patch = mpatches.Patch(color='green', label='bip125-replaceable Tx')
         handles.append(green_patch)
     if args.color_bt:
         blocktemplatetxs = get_bt_txs()
-        blue_patch = mpatches.Patch(color='blue', label='Tx in getblocktemplate')
+        blue_patch = mpatches.Patch(color='blue', label='getblocktemplate Tx')
         handles.append(blue_patch)
     if args.color_cpfp:
         cpfp_txs = get_cpfp_txs(mempoolinfo)
-        cyan_patch = mpatches.Patch(color='cyan', label='Tx is CPFP')
+        cyan_patch = mpatches.Patch(color='cyan', label='CPFP Tx')
         handles.append(cyan_patch)
     if args.hltxs:
         yellow_patch = mpatches.Patch(color='yellow', label='Input Tx')
@@ -314,7 +313,7 @@ def get_nodecolors(mempoolinfo, args, plt):
                   'y' if tx in highlight else
                   'r' for tx in G]
 
-    red_patch = mpatches.Patch(color='red', hatch='o', label='Tx in mempool')
+    red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
 
     handles.append(red_patch)
     plt.legend(handles=handles)
@@ -461,7 +460,7 @@ def get_cpfp_txs(mempoolinfo):
 def get_rbf_txs(mempoolinfo):
     if 'bip125-replaceable' in next(iter(mempoolinfo.values())):
         print("Using new bip125-replaceable flag!")
-        return set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable'] == "yes"])
+        return set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable']])
     else:
         print("WARNING! Calculating replace-by-fee txs is expensive!")
         rbf_txs = set()
@@ -519,8 +518,8 @@ def update_graph(G, old_mempool):
     return mempoolinfo
 
 
+# TODO
 def stats(mempoolinfo):
-    # TODO
     mlen = len(mempoolinfo)
     tx_fees = [get_tx_feerate(tx) for tx in mempoolinfo]
     max_fee, min_fee, mean_fee, med_fee = max(tx_fees), min(tx_fees), mean(tx_fees), median(tx_fees)
@@ -537,7 +536,7 @@ parser = argparse.ArgumentParser(add_help=True,
                                  epilog='''Help text and arguments for individual test script:''',
                                  formatter_class=argparse.RawTextHelpFormatter)
 
-parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
+#parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
 parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
 parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
 parser.add_argument('--lblock', action='store_true', help='Show time of last mined block')
@@ -586,9 +585,12 @@ if args.snapshot:
 else:
     mempoolinfo = get_mempool()
 
+# TODO
+"""
 if args.stats:
-    stats()
+    stats(mempoolinfo)
     sys.exit(0)
+"""
 
 set_build_tx_package_func(mempoolinfo)
 
