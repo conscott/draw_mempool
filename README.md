@@ -42,16 +42,17 @@ source .venv/bin/activate
 
 ### Examples
 ```
-# Only show transactions with ancestor dependencies
+# Only show transactions with ancestor dependencies within last 60 minutes with a fee-rate
+# above 20 sat/byte
 ./draw_mempool.py --minancestors=2 --minfeerate=20 --maxage=60  
 
-# Show high fee transactions
+# Show high fee transactions (above 300 sat/byte)
 ./draw_mempool.py --minfeerate=300
 
 # Animate live mempool, coloring tx's to be included in next block as blue
 ./draw_mempool.py --maxage=10 --animate --color_bt
 
-# Color RBF transactions differently
+# Color transactions signaling RBF
 ./draw_mempool.py --color_rbf 
 
 # Draw the 2-block fee estimate as a horizontal line, as well as coloring 
