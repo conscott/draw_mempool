@@ -14,7 +14,6 @@ from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
-from statistics import median, mean
 
 
 # 1 BTC = COIN Satoshis
@@ -24,7 +23,7 @@ COIN = 100000000
 MAX_RBF_SEQUENCE = (0xffffffff-1)
 
 # For looking at TX in blockchain.inf on double click
-URL_SCHEME = "https://blockchain.info/tx/{}"
+URL_SCHEME = "https://blockstream.info/tx/{}"
 
 # Different depending on if #12479 is merged
 build_tx_package_func = None
@@ -121,13 +120,16 @@ def get_tx_fee(txinfo):
 # In Sat/Byte
 def get_tx_feerate(txinfo):
     return float(txinfo['fee'])*COIN/txinfo['size']
-    # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
 
 
-# For CPFP
+# For CPFP - get previous ancestor stats excluding current transaction
+def get_ancestor_feerate_minus_current(txinfo):
+    return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['size'])
+
+
+# The feerate for all ancestors  including this transaction
 def get_ancestor_feerate(txinfo):
-    return float(txinfo['ancestorfees'])/txinfo['ancestorsize']
-    # return float(txinfo['ancestorfees'])*COIN/txinfo['size']
+    return float(txinfo['ancestorfees']*COIN) / txinfo['ancestorsize']
 
 
 # Going to add 1 to Tx age to avoid problems with log(time_delta) < 1
@@ -247,7 +249,7 @@ def setup_events(G, mempoolinfo, fig, ax):
                 if tx in G:
                     try:
                         G.remove_node(tx)
-                    except:
+                    except Exception as e:
                         pass
             if not G:
                 print("Mempool is empty without getblocktemplate")
@@ -430,7 +432,7 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
                 break
             try:
                 should_add = tx_filter(mempoolinfo[tx], **kwargs)
-            except:
+            except Exception as e:
                 # Only breaks in test mode
                 should_add = True
             if should_add:
@@ -448,9 +450,13 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
 
 
 # Find eligible CPFP transactions
+# This is not an exact science, just seeing if the
+# new transaction makes the entire ancestor feerate
+# jump up more than 10 sat/byte
 def get_cpfp_txs(mempoolinfo):
     return [tx for tx, txinfo in mempoolinfo.items()
-            if txinfo['ancestorcount'] > 1 and (get_ancestor_feerate(txinfo) + 1.0 < get_tx_feerate(txinfo))]
+            if txinfo['ancestorcount'] > 1 and
+            get_ancestor_feerate(txinfo) + 10.0 < get_ancestor_feerate_minus_current(txinfo)]
 
 
 # Load RBF transactions
@@ -511,22 +517,11 @@ def update_graph(G, old_mempool):
     for tx in removed:
         try:
             G.remove_node(tx)
-        except:
+        except Exception as e:
             pass
 
     print("Size of mempool is %s txs" % len(mempoolinfo))
     return mempoolinfo
-
-
-# TODO
-def stats(mempoolinfo):
-    mlen = len(mempoolinfo)
-    tx_fees = [get_tx_feerate(tx) for tx in mempoolinfo]
-    max_fee, min_fee, mean_fee, med_fee = max(tx_fees), min(tx_fees), mean(tx_fees), median(tx_fees)
-    tx_ages = [get_tx_age_minutes(tx) for tx in mempoolinfo]
-    max_age, min_age, mean_age, med_age = max(tx_ages), min(tx_ages), mean(tx_ages), median(tx_ages)
-    tx_size = [tx_info['size'] for tx_info in mempoolinfo.values()]
-    max_size, min_size, mean_size, med_size = max(tx_size), min(tx_size), mean(tx_size), median(tx_size)
 
 
 # Parse arguments and pass through unrecognised args
@@ -536,7 +531,6 @@ parser = argparse.ArgumentParser(add_help=True,
                                  epilog='''Help text and arguments for individual test script:''',
                                  formatter_class=argparse.RawTextHelpFormatter)
 
-#parser.add_argument('--stats', action='store_true', help='Get advanced mempool stats')
 parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
 parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
 parser.add_argument('--lblock', action='store_true', help='Show time of last mined block')
