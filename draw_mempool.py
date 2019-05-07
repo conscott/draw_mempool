@@ -119,12 +119,12 @@ def get_tx_fee(txinfo):
 
 # In Sat/Byte
 def get_tx_feerate(txinfo):
-    return float(txinfo['fee'])*COIN/txinfo['size']
+    return float(txinfo['fee'])*COIN/txinfo['vsize']
 
 
 # For CPFP - get previous ancestor stats excluding current transaction
 def get_ancestor_feerate_minus_current(txinfo):
-    return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['size'])
+    return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['vsize'])
 
 
 # The feerate for all ancestors  including this transaction
@@ -144,7 +144,7 @@ def fee_to_node_size(fee):
 
 # Max tx node size by size in bytes
 def tx_to_node_size(txinfo):
-    return min(1+txinfo['size']/10.0, 20000000)
+    return min(1+txinfo['vsize']/10.0, 20000000)
 
 
 # Add a tx and all it's relatives to the graph
@@ -225,7 +225,7 @@ def setup_events(G, mempoolinfo, fig, ax):
         dist_ratio = max(abs(nx-x)/nx, abs(ny-y)/ny)
         if dist_ratio < .02:
             print("\nSelected Tx : %s" % node)
-            print("Size          : %s" % mempoolinfo[node]['size'])
+            print("Size          : %s" % mempoolinfo[node]['vsize'])
             print("Fee           : %s" % mempoolinfo[node]['fee'])
             print("FeeRate       : %s" % get_tx_feerate(mempoolinfo[node]))
             return node
@@ -410,7 +410,7 @@ def tx_filter(tx_info,
             (package_size <= max_related) and
             (minage <= get_tx_age_minutes(tx_info) <= maxage) and
             (minheight <= tx_info['height'] <= maxheight) and
-            (minsize <= tx_info['size'] <= maxsize))
+            (minsize <= tx_info['vsize'] <= maxsize))
 
 
 def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
