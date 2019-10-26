@@ -32,13 +32,6 @@ build_tx_package_func = None
 rpc = None
 
 
-# For testing purposes
-def set_mempool(mempool):
-    global mempoolinfo
-    mempoolinfo = mempool
-    set_build_tx_package_func(mempoolinfo)
-
-
 # Set which function to use when building dependency graphs.
 # New clients have PR #12479, and are more efficient
 def set_build_tx_package_func(mempoolinfo):
@@ -122,12 +115,18 @@ def get_tx_fee(txinfo):
 
 # In Sat/Byte
 def get_tx_feerate(txinfo):
-    return float(txinfo['fee'])*COIN/txinfo['vsize']
+    try:
+        return float(txinfo['fee'])*COIN/txinfo['vsize']
+    except KeyError:
+        return float(txinfo['fee'])*COIN/txinfo['size']
 
 
 # For CPFP - get previous ancestor stats excluding current transaction
 def get_ancestor_feerate_minus_current(txinfo):
-    return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['vsize'])
+    try:
+        return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['vsize'])
+    except KeyError:
+        return float((txinfo['ancestorfees'] - txinfo['fee'])*COIN) / (txinfo['ancestorsize'] - txinfo['size'])
 
 
 # The feerate for all ancestors  including this transaction
@@ -228,7 +227,10 @@ def setup_events(G, mempoolinfo, args, fig, ax):
         dist_ratio = max(abs(nx-x)/nx, abs(ny-y)/ny)
         if dist_ratio < .02:
             print("\nSelected Tx : %s" % node)
-            print("Size          : %s" % mempoolinfo[node]['vsize'])
+            try:
+                print("Size          : %s" % mempoolinfo[node]['vsize'])
+            except KeyError:
+                print("Size          : %s" % mempoolinfo[node]['size'])
             print("Fee           : %s" % mempoolinfo[node]['fee'])
             print("FeeRate       : %s" % get_tx_feerate(mempoolinfo[node]))
             return node
@@ -322,9 +324,6 @@ def get_nodecolors(G, mempoolinfo, args, plt):
                   'y' if tx in highlight else
                   'r' for tx in G]
 
-    red_patch = mpatches.Patch(color='red', hatch='o', label='Normal Tx')
-
-    handles.append(red_patch)
     plt.legend(handles=handles)
     return nodecolors
 
@@ -410,6 +409,11 @@ def tx_filter(tx_info,
     max_related = min(maxancestors, maxdescendants)
     package_size = tx_info['ancestorcount'] + tx_info['descendantcount'] - 1
 
+    try:
+        tx_size = tx_info['vsize']
+    except KeyError:
+        tx_size = tx_info['size']
+
     return ((minfee <= tx_info['fee']*COIN <= maxfee) and
             (minfeerate <= get_tx_feerate(tx_info) <= maxfeerate) and
             (minancestors <= tx_info['ancestorcount']) and
@@ -417,7 +421,7 @@ def tx_filter(tx_info,
             (package_size <= max_related) and
             (minage <= get_tx_age_minutes(tx_info) <= maxage) and
             (minheight <= tx_info['height'] <= maxheight) and
-            (minsize <= tx_info['vsize'] <= maxsize))
+            (minsize <= tx_size <= maxsize))
 
 
 def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
