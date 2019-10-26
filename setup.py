@@ -1,3 +1,4 @@
+import re
 from setuptools import setup, find_packages
 from os import path
 
@@ -14,7 +15,7 @@ with open('./draw_mempool/__init__.py', 'r') as f:
 
 setup(
     name='draw_mempool',
-    version="0.1",
+    version=VERSION,
     author='conscott',
     author_email='conor.r.scott.88@gmail.com',
     description="Draw the Bitcoin Core mempool",
