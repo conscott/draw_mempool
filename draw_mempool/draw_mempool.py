@@ -10,10 +10,10 @@ import subprocess
 import sys
 import time
 import matplotlib.patches as mpatches
-from rpc import NodeCLI
 from matplotlib import pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from networkx.drawing.nx_agraph import graphviz_layout
+from draw_mempool.rpc import NodeCLI
 
 
 # 1 BTC = COIN Satoshis
@@ -27,6 +27,9 @@ URL_SCHEME = "https://blockstream.info/tx/{}"
 
 # Different depending on if #12479 is merged
 build_tx_package_func = None
+
+# Going to set later
+rpc = None
 
 
 # For testing purposes
@@ -204,7 +207,7 @@ def animate_graph(G, mempoolinfo, args, title=None):
 
 # Make nodes clickable. Have to find nearest neighbor to mouse
 # and then make sure it's close enough to make sense
-def setup_events(G, mempoolinfo, fig, ax):
+def setup_events(G, mempoolinfo, args, fig, ax):
 
     def getXRange():
         xmax, xmin = ax.get_xlim()
@@ -249,12 +252,16 @@ def setup_events(G, mempoolinfo, fig, ax):
                 if tx in G:
                     try:
                         G.remove_node(tx)
-                    except Exception as e:
+                    except Exception:
                         pass
             if not G:
                 print("Mempool is empty without getblocktemplate")
             else:
-                draw_mempool_graph(G, mempoolinfo, args, title='Mempool without getblocktemplate', preserve_scale=True)
+                draw_mempool_graph(G,
+                                   mempoolinfo,
+                                   args,
+                                   title='Mempool without getblocktemplate',
+                                   preserve_scale=True)
 
     fig.canvas.mpl_connect('button_press_event', onClick)
     fig.canvas.mpl_connect('key_press_event', keyPress)
@@ -274,7 +281,7 @@ def draw_mempool_graph(G, mempoolinfo, args, title=None, draw_labels=False, pres
 
     fig, ax = setup_fig()
 
-    setup_events(G, mempoolinfo, fig, ax)
+    setup_events(G, mempoolinfo, args, fig, ax)
 
     draw_on_graph(G, mempoolinfo, args, ax, fig, title=title, draw_labels=draw_labels)
 
@@ -290,11 +297,11 @@ def draw_mempool_graph(G, mempoolinfo, args, title=None, draw_labels=False, pres
 
 
 # Color nodes based on kind of tx (RBF, CPFP, etc.)
-def get_nodecolors(mempoolinfo, args, plt):
+def get_nodecolors(G, mempoolinfo, args, plt):
     handles, rbf_txs, blocktemplatetxs, cpfp_txs = [], [], [], []
     highlight = args.hltxs if args.hltxs else []
     if args.color_rbf:
-        rbf_txs = get_rbf_txs(mempoolinfo)
+        rbf_txs = get_rbf_txs(G, mempoolinfo)
         green_patch = mpatches.Patch(color='green', label='bip125-replaceable Tx')
         handles.append(green_patch)
     if args.color_bt:
@@ -336,10 +343,10 @@ def draw_on_graph(G, mempoolinfo, args, ax, fig, title=None, draw_labels=False):
     # Lable as txid
     nodelabels = {tx: tx[:4] for tx in G}
 
-    nodecolors = get_nodecolors(mempoolinfo, args, plt)
+    nodecolors = get_nodecolors(G, mempoolinfo, args, plt)
 
     # Can make the transparency of tx based on....?
-    alpha = [0.2 if c is 'r' else 0.5 for c in nodecolors]
+    alpha = [0.2 if c == 'r' else 0.5 for c in nodecolors]
 
     # Going to make log scale, but need to correct
     if (max_age - min_age) > 100:
@@ -432,7 +439,7 @@ def make_mempool_graph(mempoolinfo, only_txs=None, txlimit=15000, **kwargs):
                 break
             try:
                 should_add = tx_filter(mempoolinfo[tx], **kwargs)
-            except Exception as e:
+            except Exception:
                 # Only breaks in test mode
                 should_add = True
             if should_add:
@@ -463,7 +470,7 @@ def get_cpfp_txs(mempoolinfo):
 #
 # Much faster if used with PR #12676
 #
-def get_rbf_txs(mempoolinfo):
+def get_rbf_txs(G, mempoolinfo):
     if 'bip125-replaceable' in next(iter(mempoolinfo.values())):
         print("Using new bip125-replaceable flag!")
         return set([tx for tx in G if mempoolinfo[tx]['bip125-replaceable']])
@@ -517,85 +524,83 @@ def update_graph(G, old_mempool):
     for tx in removed:
         try:
             G.remove_node(tx)
-        except Exception as e:
+        except Exception:
             pass
 
     print("Size of mempool is %s txs" % len(mempoolinfo))
     return mempoolinfo
 
 
-# Parse arguments and pass through unrecognised args
-parser = argparse.ArgumentParser(add_help=True,
-                                 usage='%(prog)s [options]',
-                                 description='A tool to draw, filter, and animate mempool transactions',
-                                 epilog='''Help text and arguments for individual test script:''',
-                                 formatter_class=argparse.RawTextHelpFormatter)
+def main():
+    # Parse arguments and pass through unrecognised args
+    parser = argparse.ArgumentParser(add_help=True,
+                                     usage='%(prog)s [options]',
+                                     description='A tool to draw, filter, and animate mempool transactions',
+                                     epilog='''Help text and arguments for individual test script:''',
+                                     formatter_class=argparse.RawTextHelpFormatter)
 
-parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
-parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
-parser.add_argument('--lblock', action='store_true', help='Show time of last mined block')
-parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
-parser.add_argument('--color_bt', action='store_true', help='Color getblocktemplate txs different')
-parser.add_argument('--color_rbf', action='store_true', help='Color txs eligible for replace-by-fee different.')
-parser.add_argument('--color_cpfp', action='store_true', help='Color txs eligible for "Child Pays for Parent" (CPFP).')
-parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
-parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
-parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
-parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
-parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
-parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
-parser.add_argument('--minfeerate', type=float, help='Min fee rate in satoshis/byte')
-parser.add_argument('--maxfeerate', type=float, help='Max fee rate in satoshis/byte')
-parser.add_argument('--minheight', type=int, help='Min block height')
-parser.add_argument('--maxheight', type=int, help='Max block height')
-parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
-parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
-parser.add_argument('--minage', type=float, help='Min tx age in minutes')
-parser.add_argument('--maxage', type=float, help='Max tx age in minutes')
-parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
-parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
-parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
-parser.add_argument('--maxancestors', type=int, help='Max tx ancestors')
-args, unknown_args = parser.parse_known_args()
+    parser.add_argument('--datadir', help='bitcoind data dir (if not default)')
+    parser.add_argument('--animate', action='store_true', help='Update mempool drawing in real-time!')
+    parser.add_argument('--lblock', action='store_true', help='Show time of last mined block')
+    parser.add_argument('--nestimatefee', action='store', help='Show the fee estimate for n confirm')
+    parser.add_argument('--color_bt', action='store_true', help='Color getblocktemplate txs different')
+    parser.add_argument('--color_rbf', action='store_true', help='Color txs eligible for replace-by-fee different.')
+    parser.add_argument('--color_cpfp', action='store_true', help='Color txs eligible for "Child Pays for Parent" (CPFP).')
+    parser.add_argument('--snapshot', help='Specify json file of mempool snapshot')
+    parser.add_argument('--txs', action='append', help='Specific tx to draw, can list multiple')
+    parser.add_argument('--hltxs', action='append', help='Specific transaction to highlight, can list multiple')
+    parser.add_argument('--txlimit', type=int, default=10000, help=' Max number of Tx (will stop filter once reached)')
+    parser.add_argument('--minfee', type=int, help='Min fee in satoshis')
+    parser.add_argument('--maxfee', type=int, help='Max fee in satoshis')
+    parser.add_argument('--minfeerate', type=float, help='Min fee rate in satoshis/byte')
+    parser.add_argument('--maxfeerate', type=float, help='Max fee rate in satoshis/byte')
+    parser.add_argument('--minheight', type=int, help='Min block height')
+    parser.add_argument('--maxheight', type=int, help='Max block height')
+    parser.add_argument('--minsize', type=int, help='Min tx size in bytes')
+    parser.add_argument('--maxsize', type=int, help='Max tx size in bytes')
+    parser.add_argument('--minage', type=float, help='Min tx age in minutes')
+    parser.add_argument('--maxage', type=float, help='Max tx age in minutes')
+    parser.add_argument('--mindescendants', type=int, help='Min tx descendants')
+    parser.add_argument('--maxdescendants', type=int, help='Max tx descendants')
+    parser.add_argument('--minancestors', type=int, help='Min tx ancestors')
+    parser.add_argument('--maxancestors', type=int, help='Max tx ancestors')
+    args, unknown_args = parser.parse_known_args()
 
-if unknown_args:
-    print("Unknown args: %s...Try" % unknown_args)
-    print("./draw_mempool.py --help")
-    sys.exit(0)
-
-# Min/max options
-filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
-
-# Communicate with bitcoind like bitcoin test_framework
-rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
-
-# Load mempool from rpc or snaphsot
-if args.snapshot:
-    try:
-        mempoolinfo = json.load(open(args.snapshot), parse_float=decimal.Decimal)
-    except Exception as e:
-        print("Error reading snapshot json: %s" % str(e))
+    if unknown_args:
+        print("Unknown args: %s...Try" % unknown_args)
+        print("./draw_mempool.py --help")
         sys.exit(0)
-else:
-    mempoolinfo = get_mempool()
 
-# TODO
-"""
-if args.stats:
-    stats(mempoolinfo)
-    sys.exit(0)
-"""
+    # Min/max options
+    filter_options = {k: v for k, v in args.__dict__.items() if v and ('min' in k or 'max' in k)}
 
-set_build_tx_package_func(mempoolinfo)
+    # Communicate with bitcoind like bitcoin test_framework
+    global rpc
+    rpc = NodeCLI(os.getenv("BITCOINCLI", "bitcoin-cli"), args.datadir)
 
-try:
-    G = make_mempool_graph(mempoolinfo, only_txs=args.hltxs, txlimit=args.txlimit, **filter_options)
-    if not G:
-        print("Filtered out all transactions, nothing to draw")
-        sys.exit(0)
-    if args.animate:
-        animate_graph(G, mempoolinfo, args, title='Live Mempool!')
+    # Load mempool from rpc or snaphsot
+    if args.snapshot:
+        try:
+            mempoolinfo = json.load(open(args.snapshot), parse_float=decimal.Decimal)
+        except Exception as e:
+            print("Error reading snapshot json: %s" % str(e))
+            sys.exit(0)
     else:
-        draw_mempool_graph(G, mempoolinfo, args, title='Mempool')
-except KeyboardInterrupt:
-    sys.exit(0)
+        mempoolinfo = get_mempool()
+
+    set_build_tx_package_func(mempoolinfo)
+    try:
+        G = make_mempool_graph(mempoolinfo, only_txs=args.hltxs, txlimit=args.txlimit, **filter_options)
+        if not G:
+            print("Filtered out all transactions, nothing to draw")
+            sys.exit(0)
+        if args.animate:
+            animate_graph(G, mempoolinfo, args, title='Live Mempool!')
+        else:
+            draw_mempool_graph(G, mempoolinfo, args, title='Mempool')
+    except KeyboardInterrupt:
+        sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()
