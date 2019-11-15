@@ -7,8 +7,18 @@ data about the mempool and block template info.
 ### Requirements
 
 * Bitcoin Core >= v0.17
-* Python >= 3.4
-* TK for Python: `sudo apt-get install python3-tk`
+* Python 3.4, 3.5, 3.6
+* Matplotlib v2 dependencies
+* TK for Python
+
+### Install System Dependencies
+
+```
+sudo apt-get install python3-dev python3-tk
+sudo apt-get build-dep python-matplotlib
+```
+
+If the `build-dep` command does not work, you may need to enable the [deb-src](https://techoverflow.net/2018/05/03/how-to-fix-apt-get-source-you-must-put-some-source-uris-in-your-sources-list/) repository
 
 ### Installation Ubuntu & Debian
 
