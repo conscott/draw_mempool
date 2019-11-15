@@ -146,7 +146,10 @@ def fee_to_node_size(fee):
 
 # Max tx node size by size in bytes
 def tx_to_node_size(txinfo):
-    return min(1+txinfo['vsize']/10.0, 20000000)
+    try:
+        return min(1+txinfo['vsize']/10.0, 20000000)
+    except:
+        return min(1+txinfo['size']/10.0, 20000000)
 
 
 # Add a tx and all it's relatives to the graph
